@@ -1,0 +1,40 @@
+---
+utils:
+  module: utils
+  global: true
+
+#climate_test:
+#  module: climate_test
+#  class: ClimateTest
+
+central_heating:
+  module: central_heating
+  class: CentralHeating
+  dependencies: utils
+  rooms:
+    - name: Mancave
+      code: mancave
+      room_temp_sensor: sensor.sensotron_mancave_temperature
+      floor_temp_sensor: sensor.sensotron_mancave_floor_temperature
+      trv: climate.trv_mancave
+      window_sensor: binary_sensor.window_mancave_contact
+    - name: Living Room
+      code: living_room
+      room_temp_sensor: sensor.sensotron_living_room_temperature
+      floor_temp_sensor: sensor.sensotron_living_room_floor_temperature
+      trv: climate.trv_living_room
+      window_sensor: binary_sensor.window_living_room_contact
+    - name: Bedroom
+      code: bedroom
+      room_temp_sensor: sensor.sensotron_bedroom_temperature
+      floor_temp_sensor: sensor.sensotron_bedroom_floor_temperature
+      trv: climate.trv_bedroom
+      window_sensor: binary_sensor.window_bedroom_contact
+      rules:
+        - time_from: "23:00"
+          time_to: "09:00"
+          trv_open: false
+  pid_output_sensor: sensor.master_pid_output
+  room_setpoint_output_sensor: sensor.master_room_setpoint
+  pump_radiators: switch.switch_pump_radiators
+  pump_floor: switch.switch_pump_floor
