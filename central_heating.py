@@ -7,6 +7,9 @@ from typing import Any, Optional, Tuple
 from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 from simple_pid import PID
+
+from event_hook import EventHook
+from mqtt_entites import MQTTSwitch, MQTTClimate, MQTTNumber
 from utils import get_state_float, get_state_bool, to_bool, time_in_range
 
 import appdaemon.plugins.hass.hassapi as hass
@@ -130,44 +133,16 @@ class Rule:
         return f"{self.time_from}-{self.time_to}:\n" f"  TRV open: {self.trv_open}\n"
 
 
-class RoomTopics:
-    def __init__(self, room_code: str):
-        self.room_code = room_code
-
-        # Climate entity
-        self.climate_id = f"{room_code}_climate"
-        self.climate_config_topic = f"homeassistant/climate/{self.climate_id}/config"
-        self.climate_mode_topic = (f"homeassistant/climate/{self.climate_id}/mode",)
-        self.climate_preset_topic = (
-            f"homeassistant/climate/{self.climate_id}/preset_mode",
-        )
-        self.climate_temperature_topic = (
-            f"homeassistant/climate/{self.climate_id}/temperature",
-        )
-        self.climate_current_temperature_topic = (
-            f"homeassistant/climate/{self.climate_id}/current_temperature",
-        )
-
-        # Floor settings
-        self.floor_setpoint_id = f"{self.room_code}_floor_setpoint"
-        self.floor_setpoint_config_topic = (
-            f"homeassistant/number/{self.floor_setpoint_id}/config"
-        )
-        self.floor_setpoint_command_topic = (
-            f"homeassistant/number/{self.floor_setpoint_id}"
-        )
-
-        # PID config
-        self.pid_kp_id = f"{self.room_code}_pid_kp"
-        self.pid_ki_id = f"{self.room_code}_pid_ki"
-        self.pid_kp_config_topic = f"homeassistant/number/{self.pid_kp_id}/config"
-        self.pid_ki_config_topic = f"homeassistant/number/{self.pid_ki_id}/config"
-        self.pid_kp_command_topic = f"homeassistant/number/{self.pid_kp_id}"
-        self.pid_ki_command_topic = f"homeassistant/number/{self.pid_ki_id}"
-
-
 class RoomDevices:
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, api: adapi.ADAPI, config: dict[str, Any]):
+        self.api = api
+
+        # Events
+        self.on_room_temp_changed = EventHook()
+        self.on_floor_temp_changed = EventHook()
+        self.on_window_changed = EventHook()
+
+        # Config
         if "room_temp_sensor" not in config:
             raise Exception("Room temperature sensor")
 
@@ -180,40 +155,51 @@ class RoomDevices:
             config["window_sensor"] if "window_sensor" in config else None
         )
 
+        # Subscribe to state changes
+        self.api.listen_state(self.on_room_temp, self.room_temp_sensor)
+        if self.floor_temp_sensor is not None:
+            self.api.listen_state(self.on_floor_temp, self.floor_temp_sensor)
+        if self.window_sensor is not None:
+            self.api.listen_state(self.on_window, self.window_sensor)
 
-class RoomSettings:
-    def __init__(
-        self,
-        api: adapi.ADAPI,
-        mqtt: mqttapi.Mqtt,
-        room_code: str,
-        config: dict[str, Any],
-    ):
-        self.api = api
-        self.mqtt = mqtt
-        self.room_code = room_code
+    @property
+    def room_temp(self) -> Optional[float]:
+        return get_state_float(self.api, self.room_temp_sensor)
 
-        self.room_setpoint = get_state_float(
-            self.api,
-            f"{self.room_code}.room_setpoint",
-            default=23.5,
-            namespace=CH_NAMESPACE,
+    @property
+    def floor_temp(self) -> Optional[float]:
+        return get_state_float(self.api, self.floor_temp_sensor)
+
+    @property
+    def window_open(self) -> Optional[bool]:
+        return get_state_bool(self.api, self.window_sensor)
+
+    @property
+    def trv_open(self) -> bool:
+        return self.api.get_state(self.trv) == "heat"
+
+    def open_trv(self):
+        if not self.trv:
+            return
+        self.api.call_service(
+            "climate/set_hvac_mode", entity_id=self.trv, hvac_mode="heat"
         )
-        self.floor_setpoint = get_state_float(
-            self.api,
-            f"{self.room_code}.floor_setpoint",
-            default=28,
-            namespace=CH_NAMESPACE,
+
+    def close_trv(self):
+        if not self.trv:
+            return
+        self.api.call_service(
+            "climate/set_hvac_mode", entity_id=self.trv, hvac_mode="off"
         )
-        self.pid_kp = get_state_float(
-            self.api, f"{self.room_code}.pid_kp", default=0.5, namespace=CH_NAMESPACE
-        )
-        self.pid_ki = get_state_float(
-            self.api, f"{self.room_code}.pid_ki", default=0.001, namespace=CH_NAMESPACE
-        )
-        self.rules: list[Rule] = (
-            [Rule(item) for item in config["rules"]] if "rules" in config else []
-        )
+
+    def on_room_temp(self, entity, attribute, old: str, new: str, cb_args):
+        self.on_room_temp_changed()
+
+    def on_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
+        self.on_floor_temp_changed()
+
+    def on_window(self, entity, attribute, old: str, new: str, cb_args):
+        self.on_window_changed()
 
 
 class Room:
@@ -236,45 +222,92 @@ class Room:
         self.name = config["name"]
         self.code = config["code"]
 
-        self.devices = RoomDevices(config)
-        self.topics = RoomTopics(self.code)
-        self.settings = RoomSettings(self.code, config)
+        # Room sensors
+        self.devices = RoomDevices(self.api, config)
+        self.devices.on_room_temp_changed += self.on_room_temp_changed
+        self.devices.on_floor_temp_changed += self.on_floor_temp_changed
+        self.devices.on_window_changed += self.on_window_changed
+
+        # MQTT entities
+        self.climate = MQTTClimate(
+            api, mqtt, self.code, self.name, "climate", "Climate"
+        )
+        self.floor_setpoint = MQTTNumber(
+            api,
+            mqtt,
+            self.code,
+            "floor_setpoint",
+            "Floor setpoint",
+            28,
+            15,
+            32,
+            0.5,
+            icon="mdi:thermometer",
+            category="config",
+        )
+        self.pid_kp = MQTTNumber(
+            api,
+            mqtt,
+            self.code,
+            "pid_kp",
+            "PID kp",
+            0.5,
+            0.000001,
+            1000000,
+            0.01,
+            icon="mdi:knob",
+            category="config",
+        )
+        self.pid_ki = MQTTNumber(
+            api,
+            mqtt,
+            self.code,
+            "pid_ki",
+            "PID ki",
+            0.001,
+            0.000001,
+            1000000,
+            0.01,
+            icon="mdi:knob",
+            category="config",
+        )
+        self.enable = MQTTSwitch(
+            api, mqtt, self.code, "enable", "Enable", True, "mdi:toggle-switch-variant"
+        )
+
+        self.climate.on_mode_changed += self.on_mode_changed
+        self.climate.on_preset_changed += self.on_preset_changed
+        self.climate.on_temperature_changed += self.on_temperature_changed
+        self.pid_kp.on_state_changed += self.on_pid_kp_changed
+        self.pid_ki.on_state_changed += self.on_pid_ki_changed
+        self.enable.on_state_changed += self.on_enable_changed
+
+        # Confgure MQTT entities
+        self.climate.configure()
+        self.floor_setpoint.configure()
+        self.pid_kp.configure()
+        self.pid_ki.configure()
+        self.enable.configure()
+
+        # Will migrate rules later
+        self.rules: list[Rule] = (
+            [Rule(item) for item in config["rules"]] if "rules" in config else []
+        )
 
         # State
-        self.window_open = False
-        self.trv_open = True
+        self.last_window_open = False
         self.window_warmup_time: Optional[datetime] = None
         self.pid_output: float = 0
-        self.enabled: bool = (
-            get_state_bool(self.api, f"switch.{self.sensor_prefix}_enable_thermostat")
-            or False
-        )
 
         # PID
         self.pid = PID(
-            self.pid_config[0],
-            self.pid_config[1],
-            self.pid_config[2],
-            room_setpoint,
+            self.pid_kp.state,
+            self.pid_ki.state,
+            0,
+            self.climate.temperature,
             1,
             (-1, 1),
         )
-
-        # State callbacks
-        self.api.listen_state(
-            self.on_enabled, f"switch.{self.sensor_prefix}_enable_thermostat"
-        )
-        self.api.listen_state(
-            self.on_room_setpoint, f"number.{self.sensor_prefix}_room_setpoint"
-        )
-        self.api.listen_state(self.on_room_temp, self.room_temp_sensor)
-        if self.floor_temp_sensor is not None:
-            self.api.listen_state(self.on_floor_temp, self.floor_temp_sensor)
-        if self.window_sensor is not None:
-            self.api.listen_state(self.on_window, self.window_sensor)
-
-        # Create MQTT entities
-        self.configure_mqtt()
 
     def control_room_temperature(self):
         pid_active_window = self.process_window_state()
@@ -287,9 +320,9 @@ class Room:
         Decides whether PID should be active based on whether window is open or closed
         :return: True is PID needs to be active
         """
-        window_open = get_state_bool(self.api, self.window_sensor) or False
+        window_open = self.devices.window_open or False
 
-        if self.window_open == window_open:  # There was no change
+        if self.last_window_open == window_open:  # There was no change
             if (
                 not window_open
                 and self.window_warmup_time is not None
@@ -300,8 +333,7 @@ class Room:
                 self.window_warmup_time = None
 
         else:  # Window state changed
-            self.window_open = window_open
-            self.report_window()
+            self.last_window_open = window_open
 
             if window_open:
                 # If the window got opened, we stop the PID and reset warmup time
@@ -339,212 +371,72 @@ class Room:
         if not self.pid.auto_mode:
             return
 
-        cur_temp = get_state_float(self.api, self.room_temp_sensor)
+        cur_temp = self.devices.room_temp
         if cur_temp is None:
             self.api.log("Failed to get room temperature for room %s", self.name)
             return
 
         self.pid_output = self.pid(cur_temp)
-        self.report_float_sensor("pid_output", value=round(self.pid_output * 100, 2))
-        self.report_float_sensor(
-            "pid_proportional", value=round(self.pid.components[0] * 100, 2)
-        )
-        self.report_float_sensor(
-            "pid_integral", value=round(self.pid.components[1] * 100, 2)
-        )
-        self.report_pid_status()
-        self.mqtt.mqtt_publish(
-            f"homeassistant/climate/{self.sensor_prefix}_climate/current_temperature/state",
-            cur_temp,
-        )
 
     def update_trv(self):
-        if self.trv is None:
+        if self.devices.trv is None:
             return
 
-        self.trv_open = self.api.get_state(self.trv) == "heat"
-        self.report_trv()
+        trv_open = self.devices.trv_open
         cur_time: datetime = self.api.get_now()
 
         # We need these margins so that TRVs don't jitter back and forth when PIDs are fluctuating around zero.
         if self.pid_output > 0.01:
-            if not self.trv_open:
-                self.open_trv()
+            if not trv_open:
+                self.devices.open_trv()
         elif self.pid_output < -0.01:
-            if self.trv_open:
-                self.close_trv()
+            if trv_open:
+                self.devices.close_trv()
 
     def start_pid(self):
         if self.pid.auto_mode:
             return
 
         self.pid.set_auto_mode(True, self.pid_output)
-        self.report_pid_status()
 
     def stop_pid(self):
         if not self.pid.auto_mode:
             return
 
         self.pid.set_auto_mode(False)
-        self.report_pid_status()
 
-    def open_trv(self):
-        if not self.trv:
-            return
-        self.api.call_service(
-            "climate/set_hvac_mode", entity_id=self.trv, hvac_mode="heat"
-        )
-
-    def close_trv(self):
-        if not self.trv:
-            return
-        self.api.call_service(
-            "climate/set_hvac_mode", entity_id=self.trv, hvac_mode="off"
-        )
-
-    # ========= Callbacks
-    def on_enabled(self, entity, attribute, old: str, new: str, cb_args):
-        self.control_heating_callback()
-
-    def on_room_temp(self, entity, attribute, old: str, new: str, cb_args):
-        self.control_heating_callback()
-
-    def on_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
+    # New callbacks
+    # MQTT entites
+    def on_mode_changed(self):
         pass
 
-    def on_window(self, entity, attribute, old: str, new: str, cb_args):
+    def on_preset_changed(self):
+        pass
+
+    def on_temperature_changed(self):
+        pass
+
+    def on_floor_setpoint_changed(self):
+        pass
+
+    def on_pid_kp_changed(self):
+        pass
+
+    def on_pid_ki_changed(self):
+        pass
+
+    def on_enable_changed(self):
+        pass
+
+    # Room sensors
+    def on_room_temp_changed(self):
+        self.control_heating_callback()
+
+    def on_floor_temp_changed(self):
+        pass
+
+    def on_window_changed(self):
         self.process_window_state()
-
-    def on_room_setpoint(self, entity, attribute, old: str, new: str, cb_args):
-        self.api.log("Room setpoint changed for room %s: %s", self.name, new)
-        self.pid.setpoint = float(new)
-
-    def on_climate_setpoint(self, event_name, data, cb_args):
-        self.api.log("Setpoint changed!")
-        self.api.log(type(data))
-        self.api.log(data)
-
-    # ========= Report sensors
-    def report_pid_status(self):
-        self.report_binary_sensor("pid_active", self.pid.auto_mode)
-
-    def report_window(self):
-        self.report_binary_sensor("window_open", self.window_open)
-
-    def report_trv(self):
-        self.report_binary_sensor("trv_open", self.trv_open)
-
-    def report_binary_sensor(self, name_no_prefix: str, value: Optional[bool]):
-        if value is None:
-            return
-        if value:
-            self.api.call_service(
-                "virtual/turn_on",
-                entity_id=f"binary_sensor.{self.sensor_prefix}_{name_no_prefix}",
-            )
-        else:
-            self.api.call_service(
-                "virtual/turn_off",
-                entity_id=f"binary_sensor.{self.sensor_prefix}_{name_no_prefix}",
-            )
-
-    def report_float_sensor(self, name_no_prefix: str, value: Optional[float]):
-        if value is not None:
-            self.api.call_service(
-                "virtual/set",
-                entity_id=f"sensor.{self.sensor_prefix}_{name_no_prefix}",
-                value=value,
-            )
-
-    # ============ MQTT stuff
-    def configure_mqtt(self):
-        # Configure climate
-        self.mqtt.mqtt_publish(
-            self.topics.climate_config_topic,
-            json.dumps(
-                {
-                    "mode_command_topic": self.topics.climate_mode_topic,
-                    "preset_mode_command_topic": self.topics.climate_preset_topic,
-                    "temperature_command_topic": self.topics.climate_temperature_topic,
-                    "current_temperature_topic": self.topics.climate_current_temperature_topic,
-                    "unique_id": self.topics.climate_id,
-                    "modes": ["off", "heat"],
-                    "preset_modes": ["home", "away", "sleep"],
-                    "name": "Climate",
-                    "device": {
-                        "identifiers": [f"{self.topics.climate_id}_device"],
-                        "name": self.name,
-                        "manufacturer": "Cats Ltd.",
-                        "model": "Virtual Climate Device",
-                    },
-                }
-            ),
-        )
-
-        # Configure PID settings numbers
-        self.mqtt.mqtt_publish(
-            self.topics.pid_kp_config_topic,
-            json.dumps(
-                {
-                    "platform": "number",
-                    "command_topic": self.topics.pid_kp_command_topic,
-                    "entity_category": "config",
-                    "icon": "mdi:knob",
-                    "min": "0.000001",
-                    "max": "1000000",
-                    "step": "0.001",
-                    "mode": "box",
-                    "unique_id": self.topics.pid_kp_id,
-                    "name": "PID kp",
-                    "device": {"identifiers": [f"{self.topics.climate_id}_device"]},
-                }
-            ),
-        )
-        self.mqtt.mqtt_publish(
-            self.topics.pid_ki_config_topic,
-            json.dumps(
-                {
-                    "platform": "number",
-                    "command_topic": self.topics.pid_ki_command_topic,
-                    "entity_category": "config",
-                    "icon": "mdi:knob",
-                    "min": "0.000001",
-                    "max": "1000000",
-                    "step": "0.001",
-                    "mode": "box",
-                    "unique_id": self.topics.pid_ki_id,
-                    "name": "PID ki",
-                    "device": {"identifiers": [f"{self.topics.climate_id}_device"]},
-                }
-            ),
-        )
-
-        # Configure floor setpoint number
-        self.mqtt.mqtt_publish(
-            self.topics.floor_setpoint_config_topic,
-            json.dumps(
-                {
-                    "platform": "number",
-                    "command_topic": self.topics.floor_setpoint_command_topic,
-                    "entity_category": "config",
-                    "icon": "mdi:thermometer",
-                    "min": "15",
-                    "max": "35",
-                    "step": "0.5",
-                    "mode": "box",
-                    "unique_id": self.topics.floor_setpoint_id,
-                    "name": "PID kp",
-                    "device": {"identifiers": [f"{self.topics.climate_id}_device"]},
-                }
-            ),
-        )
-
-        # self.mqtt.mqtt_subscribe(f"homeassistant/climate/{climate_id}/temperature/set")
-        # self.mqtt.listen_event(
-        #     self.on_climate_setpoint,
-        #     "MQTT_MESSAGE",
-        #     topic=f"homeassistant/climate/{climate_id}/temperature/set",
-        # )
 
     def __repr__(self):
         return (
