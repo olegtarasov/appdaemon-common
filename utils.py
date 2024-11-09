@@ -1,11 +1,8 @@
-from typing import Any, Optional
 from datetime import time
+from typing import Any, Optional
 
 from appdaemon.adapi import ADAPI
 from appdaemon.utils import sync_wrapper
-
-import appdaemon.plugins.hass.hassapi as hass
-from appdaemon import utils
 
 bool_true = {"y", "yes", "true", "on"}
 bool_false = {"n", "no", "false", "off"}

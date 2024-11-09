@@ -8,9 +8,6 @@ event_hook:
 mqtt_entities:
   module: mqtt_entites
   global: true
-#climate_test:
-#  module: climate_test
-#  class: ClimateTest
 
 central_heating:
   module: central_heating
@@ -38,11 +35,5 @@ central_heating:
       floor_temp_sensor: sensor.sensotron_bedroom_floor_temperature
       trv: climate.trv_bedroom
       window_sensor: binary_sensor.window_bedroom_contact
-      rules:
-        - time_from: "23:00"
-          time_to: "09:00"
-          trv_open: false
-  pid_output_sensor: sensor.master_pid_output
-  room_setpoint_output_sensor: sensor.master_room_setpoint
   pump_radiators: switch.switch_pump_radiators
   pump_floor: switch.switch_pump_floor

@@ -1,9 +1,10 @@
 import json
-from email.policy import default
+import traceback
+from typing import Any, Callable, Iterable, Optional, cast
 
 from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
-from typing import Any, Callable, Iterable, Optional, Protocol
+
 from event_hook import EventHook
 from utils import get_state_bool, get_state_float, to_bool
 
@@ -156,8 +157,13 @@ class MQTTClimate(MQTTEntityBase):
 
     @property
     def mode(self) -> str:
-        return self.api.get_state(
-            self.full_entity_id, default="off" if not self.heat_only else "heat"
+        return cast(
+            str,
+            self.api.get_state(
+                self.full_entity_id,
+                default="off" if not self.heat_only else "heat",
+                namespace=CH_NAMESPACE,
+            ),
         )
 
     @mode.setter
@@ -169,7 +175,12 @@ class MQTTClimate(MQTTEntityBase):
 
     @property
     def preset(self) -> str:
-        return self.api.get_state(self.full_entity_id, "preset", "home")
+        return cast(
+            str,
+            self.api.get_state(
+                self.full_entity_id, "preset", "home", namespace=CH_NAMESPACE
+            ),
+        )
 
     @preset.setter
     def preset(self, value: Optional[str]) -> None:
@@ -183,7 +194,11 @@ class MQTTClimate(MQTTEntityBase):
     @property
     def temperature(self) -> float:
         return get_state_float(
-            self.api, self.full_entity_id, "temperature", self.default_temperature
+            self.api,
+            self.full_entity_id,
+            "temperature",
+            self.default_temperature,
+            namespace=CH_NAMESPACE,
         )
 
     @temperature.setter
@@ -315,7 +330,10 @@ class MQTTNumber(MQTTEntityBase):
     @property
     def state(self) -> float:
         return get_state_float(
-            self.api, self.full_entity_id, default=self.default_value
+            self.api,
+            self.full_entity_id,
+            default=self.default_value,
+            namespace=CH_NAMESPACE,
         )
 
     @state.setter
@@ -395,7 +413,12 @@ class MQTTSwitch(MQTTEntityBase):
 
     @property
     def state(self) -> bool:
-        return get_state_bool(self.api, self.full_entity_id, default=self.default_value)
+        return get_state_bool(
+            self.api,
+            self.full_entity_id,
+            default=self.default_value,
+            namespace=CH_NAMESPACE,
+        )
 
     @state.setter
     def state(self, value: Optional[bool]) -> None:
@@ -467,7 +490,10 @@ class MQTTSensor(MQTTEntityBase):
     @property
     def state(self) -> float:
         return get_state_float(
-            self.api, self.full_entity_id, default=self.default_value
+            self.api,
+            self.full_entity_id,
+            default=self.default_value,
+            namespace=CH_NAMESPACE,
         )
 
     @state.setter
@@ -533,7 +559,12 @@ class MQTTBinarySensor(MQTTEntityBase):
 
     @property
     def state(self) -> bool:
-        return get_state_bool(self.api, self.full_entity_id, default=self.default_value)
+        return get_state_bool(
+            self.api,
+            self.full_entity_id,
+            default=self.default_value,
+            namespace=CH_NAMESPACE,
+        )
 
     @state.setter
     def state(self, value: Optional[bool]) -> None:
