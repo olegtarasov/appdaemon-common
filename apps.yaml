@@ -2,7 +2,12 @@
 utils:
   module: utils
   global: true
-
+event_hook:
+  module: event_hook
+  global: true
+mqtt_entities:
+  module: mqtt_entites
+  global: true
 #climate_test:
 #  module: climate_test
 #  class: ClimateTest
@@ -10,7 +15,10 @@ utils:
 central_heating:
   module: central_heating
   class: CentralHeating
-  dependencies: utils
+  dependencies:
+    - utils
+    - event_hook
+    - mqtt_entities
   rooms:
     - name: Mancave
       code: mancave

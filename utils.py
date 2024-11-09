@@ -13,27 +13,44 @@ bool_false = {"n", "no", "false", "off"}
 
 @sync_wrapper
 async def get_state_float(
-    self: ADAPI, entity: str, **kwargs: Optional[Any]
+    api: ADAPI,
+    entity: str,
+    attribute: Optional[str] = None,
+    default: Any = None,
+    **kwargs: Optional[Any]
 ) -> Optional[float]:
-    value = await self.get_state(entity, **kwargs)
+    value = await api.get_state(entity, attribute, default, **kwargs)
+    if value is None:
+        return default
     try:
         return float(value)
     except:
-        self.log("Failed to get float value for entity %s. Received: %s", entity, value)
+        api.log("Failed to get float value for entity %s. Received: %s", entity, value)
         return None
 
 
 @sync_wrapper
 async def get_state_bool(
-    api: ADAPI, entity: str, **kwargs: Optional[Any]
+    api: ADAPI,
+    entity: str,
+    attribute: Optional[str] = None,
+    default: Any = None,
+    **kwargs: Optional[Any]
 ) -> Optional[bool]:
-    value = await api.get_state(entity, **kwargs)
+    value = await api.get_state(entity, attribute, default, **kwargs)
     if value is None:
-        return None
+        return default
+    if isinstance(value, bool):
+        return value
     try:
         return to_bool(value.lower())
     except:
-        api.log("Failed to get bool value for entity %s. Received: %s", entity, value)
+        api.log(
+            "Failed to get bool value for entity %s. Received: %s, type: %s",
+            entity,
+            value,
+            type(value),
+        )
         return None
 
 
