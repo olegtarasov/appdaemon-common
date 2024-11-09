@@ -69,7 +69,14 @@ class CentralHeating(hass.Hass):
             "Virtual Room Thermostat",
             [self.master_room_climate, self.master_pid_output],
         )
-        self.master_device.configure()
+
+        # Subscribe to HA MQTT status message and run room and master configuration
+        mqtt.mqtt_subscribe("homeassistant/status")
+        mqtt.listen_event(
+            self._handle_ha_mqtt_start, "MQTT_MESSAGE", topic="homeassistant/status"
+        )
+
+        self.configure()
 
         # noinspection PyTypeChecker
         self.run_every(self.on_control_timer, "now+1", 1)
@@ -113,6 +120,23 @@ class CentralHeating(hass.Hass):
         self.master_pid_output.state = pid_output
 
         return pid_output, any_trv_open
+
+    def configure(self):
+        for room in self.rooms:
+            room.configure()
+
+        self.master_device.configure()
+
+    def _handle_ha_mqtt_start(self, event_name, data, cb_args):
+        if not "payload" in data:
+            self.error("No payload in MQTT data dict: %s", data)
+            return
+
+        if data["payload"] == "online":
+            self.log(
+                "HA MQTT integration restarted, resend discovery and initial state"
+            )
+            self.configure()
 
     # ========= Callbacks
     def on_control_timer(self, cb_args):
@@ -575,24 +599,24 @@ class Room:
         for entity in self.entities:
             entities_mqtt.extend(entity.mqtt_entities)
 
-        # Create and register MQTT room device
+        # Create MQTT room device
         self.room_device = MQTTDevice(
             f"{self.config.room_code}_device",
             self.config.room_name,
             "Virtual Room Thermostat",
             entities_mqtt,
         )
-        self.room_device.configure()
-
-        # Report initial states
-        for entity in self.entities:
-            entity.report_state()
 
     def control_room_temperature(self):
         self.room_climate.claculate_output()
         if self.trv is not None:
             self.trv.operate_trv(self.room_climate.hinged_output)
             self.trv.report_state()
+
+    def configure(self):
+        self.room_device.configure()
+        for entity in self.entities:
+            entity.report_state()
 
     TEntity = TypeVar("TEntity", bound=EntityBase)
 

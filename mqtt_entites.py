@@ -256,6 +256,7 @@ class MQTTClimate(MQTTEntityBase):
 
         self._add_optional_fields(config)
 
+        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(self.config_topic, json.dumps(config))
 
         # Subscribe for commands
@@ -372,6 +373,7 @@ class MQTTNumber(MQTTEntityBase):
 
         self._add_optional_fields(config)
 
+        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
@@ -452,6 +454,7 @@ class MQTTSwitch(MQTTEntityBase):
 
         self._add_optional_fields(config)
 
+        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
@@ -527,7 +530,7 @@ class MQTTSensor(MQTTEntityBase):
 
         self._add_optional_fields(config)
 
-        self.api.log("Configuring sensor entity %s", self.entity_id)
+        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
@@ -597,7 +600,7 @@ class MQTTBinarySensor(MQTTEntityBase):
 
         self._add_optional_fields(config)
 
-        self.api.log("Configuring binary_sensor entity %s", self.entity_id)
+        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
