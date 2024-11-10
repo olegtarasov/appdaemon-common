@@ -33,18 +33,15 @@ class MQTTEntityBase:
         room_code: str,
         entity_code: str,
         entity_name: str,
-        icon: str,
-        entity_category: str,
+        kwargs: dict[str, Any],
     ) -> None:
         self.api = api
         self.mqtt = mqtt
+        self.kwargs = kwargs
         self.entity_id = f"{room_code}_{entity_code}"
         self.full_entity_id = f"{self.entity_type}.{self.entity_id}"
         self.entity_name = entity_name
         self.config_topic = f"homeassistant/{self.entity_type}/{self.entity_id}/config"
-
-        self.icon = icon
-        self.entity_category = entity_category
 
     @property
     def entity_type(self) -> str:
@@ -56,12 +53,6 @@ class MQTTEntityBase:
     def _mqtt_subscribe(self, handler: Callable, topic: str):
         self.mqtt.mqtt_subscribe(topic)
         self.mqtt.listen_event(handler, "MQTT_MESSAGE", topic=topic)
-
-    def _add_optional_fields(self, config: dict[str, Any]):
-        if self.icon is not None:
-            config["icon"] = self.icon
-        if self.entity_category is not None:
-            config["entity_category"] = self.entity_category
 
     def _get_string_payload(
         self, data: dict[str, Any], default_value: Optional[str] = None
@@ -114,12 +105,9 @@ class MQTTClimate(MQTTEntityBase):
         has_presets=True,
         heat_only=False,
         default_temperature=23.5,
-        icon: str = None,
-        entity_category: str = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            api, mqtt, room_code, entity_code, entity_name, icon, entity_category
-        )
+        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
 
         # Config
         self.has_presets = has_presets
@@ -244,6 +232,7 @@ class MQTTClimate(MQTTEntityBase):
                 "manufacturer": "Cats Ltd.",
                 "model": device.device_model,
             },
+            **self.kwargs,
         }
 
         if not self.heat_only:
@@ -253,8 +242,6 @@ class MQTTClimate(MQTTEntityBase):
             config["preset_mode_command_topic"] = self.preset_command_topic
             config["preset_mode_state_topic"] = self.preset_state_topic
             config["preset_modes"] = ["home", "away", "sleep"]
-
-        self._add_optional_fields(config)
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(self.config_topic, json.dumps(config))
@@ -307,12 +294,9 @@ class MQTTNumber(MQTTEntityBase):
         max_value: float = 100,
         step: float = 0.1,
         mode: str = "box",
-        icon: str = None,
-        entity_category: str = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            api, mqtt, room_code, entity_code, entity_name, icon, entity_category
-        )
+        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -369,9 +353,8 @@ class MQTTNumber(MQTTEntityBase):
                 "manufacturer": "Cats Ltd.",
                 "model": device.device_model,
             },
+            **self.kwargs,
         }
-
-        self._add_optional_fields(config)
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
@@ -396,12 +379,9 @@ class MQTTSwitch(MQTTEntityBase):
         entity_code: str,
         entity_name: str,
         default_value: bool = False,
-        icon: str = None,
-        entity_category: str = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            api, mqtt, room_code, entity_code, entity_name, icon, entity_category
-        )
+        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -450,9 +430,8 @@ class MQTTSwitch(MQTTEntityBase):
                 "manufacturer": "Cats Ltd.",
                 "model": device.device_model,
             },
+            **self.kwargs,
         }
-
-        self._add_optional_fields(config)
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
@@ -477,13 +456,10 @@ class MQTTSensor(MQTTEntityBase):
         entity_code: str,
         entity_name: str,
         default_value: float = 0,
-        icon: str = None,
-        entity_category: str = None,
         state_class: str = "measurement",
+        **kwargs,
     ) -> None:
-        super().__init__(
-            api, mqtt, room_code, entity_code, entity_name, icon, entity_category
-        )
+        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -529,9 +505,8 @@ class MQTTSensor(MQTTEntityBase):
                 "manufacturer": "Cats Ltd.",
                 "model": device.device_model,
             },
+            **self.kwargs,
         }
-
-        self._add_optional_fields(config)
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
@@ -550,17 +525,12 @@ class MQTTBinarySensor(MQTTEntityBase):
         entity_code: str,
         entity_name: str,
         default_value: bool = False,
-        icon: str = None,
-        entity_category: str = None,
-        device_class: Optional[str] = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            api, mqtt, room_code, entity_code, entity_name, icon, entity_category
-        )
+        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
-        self.device_class = device_class
 
         # Topics
         self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
@@ -601,11 +571,8 @@ class MQTTBinarySensor(MQTTEntityBase):
                 "manufacturer": "Cats Ltd.",
                 "model": device.device_model,
             },
+            **self.kwargs,
         }
-
-        self._add_optional_fields(config)
-        if self.device_class is not None:
-            config["device_class"] = self.device_class
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(

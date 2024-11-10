@@ -312,9 +312,9 @@ class TRV(EntityBase):
                 "trv_open",
                 "TRV",
                 True,
-                "mdi:pipe-valve",
-                "diagnostic",
-                "opening",
+                icon="mdi:pipe-valve",
+                entity_category="diagnostic",
+                device_class="opening",
             )
         )
 
@@ -444,7 +444,7 @@ class PIDClimate(EntityBase):
                 "pid_active",
                 "PID active",
                 entity_category="diagnostic",
-                device_class="running"
+                device_class="running",
             )
         )
         self.pid_proportional_sensor = self.register_mqtt_entity(
