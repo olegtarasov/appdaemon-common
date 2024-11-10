@@ -173,10 +173,20 @@ class RoomConfig:
         self.floor_temp_sensor = (
             config["floor_temp_sensor"] if "floor_temp_sensor" in config else None
         )
-        self.trv = config["trv"] if "trv" in config else None
-        self.window_sensor = (
-            config["window_sensor"] if "window_sensor" in config else None
-        )
+
+        self.trvs: Optional[list[str]] = None
+        if "trv" in config["trv"]:
+            self.trvs = (
+                config["trv"] if isinstance(config["trv"], list) else [config["trv"]]
+            )
+
+        self.window_sensors: Optional[list[str]] = None
+        if "window_sensor" in config:
+            self.window_sensors = (
+                config["window_sensor"]
+                if isinstance(config["window_sensor"], list)
+                else [config["window_sensor"]]
+            )
 
 
 class EntityBase:
@@ -203,8 +213,8 @@ class EntityBase:
 
 class Window(EntityBase):
     def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
-        if config.window_sensor is None:
-            raise Exception("Window sensor not configured")
+        if config.window_sensors is None:
+            raise Exception("Window sensors are not configured")
 
         super().__init__(api, mqtt, config)
 
@@ -225,22 +235,27 @@ class Window(EntityBase):
         )
 
         # Subscribe
-        self.api.listen_state(self._on_window, self.config.window_sensor)
+        for sensor in config.window_sensors:
+            self.api.listen_state(self._on_window, sensor)
 
         # State
         self._last_open = False
         self._warmup_time: Optional[datetime] = None
 
     @property
-    def window_open(self) -> Optional[bool]:
-        return get_state_bool(self.api, self.config.window_sensor)
+    def window_open(self) -> bool:
+        result = False
+        for sensor in self.config.window_sensors:
+            result = result or (get_state_bool(self.api, sensor) or False)
+
+        return result
 
     def should_heat(self) -> bool:
         """
         Decides whether PID should be active based on whether window is open or closed
         :return: True is PID needs to be active
         """
-        window_open = self.window_open or False
+        window_open = self.window_open
 
         if self._last_open == window_open:  # There was no change
             if (
@@ -280,7 +295,7 @@ class Window(EntityBase):
 
 class TRV(EntityBase):
     def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
-        if config.trv is None:
+        if config.trvs is None:
             raise Exception("TRV not configured")
 
         super().__init__(api, mqtt, config)
@@ -303,33 +318,36 @@ class TRV(EntityBase):
         )
 
         # Subscribe
-        self.api.listen_state(self._on_trv, self.config.window_sensor)
+        for trv in config.trvs:
+            self.api.listen_state(self._on_trv, trv)
 
     @property
     def trv_open(self) -> bool:
-        return self.api.get_state(self.config.trv) == "heat"
+        result = False
+        for trv in self.config.trvs:
+            result = result or self.api.get_state(trv) == "heat"
+
+        return result
 
     def operate_trv(self, pid_output: float):
-        trv_open = self.trv_open
-
         if pid_output > 0:
-            if not trv_open:
-                self.open_trv()
-                self.report_state()
+            self.open_trvs()
         else:
-            if trv_open:
-                self.close_trv()
-                self.report_state()
+            self.close_trvs()
 
-    def open_trv(self):
-        self.api.call_service(
-            "climate/set_hvac_mode", entity_id=self.config.trv, hvac_mode="heat"
-        )
+        self.report_state()
 
-    def close_trv(self):
-        self.api.call_service(
-            "climate/set_hvac_mode", entity_id=self.config.trv, hvac_mode="off"
-        )
+    def open_trvs(self):
+        for trv in self.config.trvs:
+            self.api.call_service(
+                "climate/set_hvac_mode", entity_id=trv, hvac_mode="heat"
+            )
+
+    def close_trvs(self):
+        for trv in self.config.trvs:
+            self.api.call_service(
+                "climate/set_hvac_mode", entity_id=trv, hvac_mode="off"
+            )
 
     def report_state(self) -> None:
         self.trv_sensor.state = self.trv_open
@@ -583,11 +601,11 @@ class Room:
         )
         self.window = self._add_entity(
             Window(api, mqtt, self.config)
-            if self.config.window_sensor is not None
+            if self.config.window_sensors is not None
             else None
         )
         self.trv = self._add_entity(
-            TRV(api, mqtt, self.config) if self.config.trv is not None else None
+            TRV(api, mqtt, self.config) if self.config.trvs is not None else None
         )
 
         # Entity-specific config
