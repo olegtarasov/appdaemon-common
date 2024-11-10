@@ -479,6 +479,7 @@ class MQTTSensor(MQTTEntityBase):
         default_value: float = 0,
         icon: str = None,
         entity_category: str = None,
+        state_class: str = "measurement",
     ) -> None:
         super().__init__(
             api, mqtt, room_code, entity_code, entity_name, icon, entity_category
@@ -486,6 +487,7 @@ class MQTTSensor(MQTTEntityBase):
 
         # Config
         self.default_value = default_value
+        self.state_class = state_class
 
         # Topics
         self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
@@ -520,6 +522,7 @@ class MQTTSensor(MQTTEntityBase):
             "state_topic": self.state_topic,
             "unique_id": self.entity_id,
             "name": self.entity_name,
+            "state_class": self.state_class,
             "device": {
                 "identifiers": [device.device_id],
                 "name": device.device_name,
@@ -549,6 +552,7 @@ class MQTTBinarySensor(MQTTEntityBase):
         default_value: bool = False,
         icon: str = None,
         entity_category: str = None,
+        device_class: Optional[str] = None,
     ) -> None:
         super().__init__(
             api, mqtt, room_code, entity_code, entity_name, icon, entity_category
@@ -556,6 +560,7 @@ class MQTTBinarySensor(MQTTEntityBase):
 
         # Config
         self.default_value = default_value
+        self.device_class = device_class
 
         # Topics
         self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
@@ -599,6 +604,8 @@ class MQTTBinarySensor(MQTTEntityBase):
         }
 
         self._add_optional_fields(config)
+        if self.device_class is not None:
+            config["device_class"] = self.device_class
 
         self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(

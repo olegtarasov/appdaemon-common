@@ -229,8 +229,8 @@ class Window(EntityBase):
                 config.room_code,
                 "window_open",
                 "Window",
-                icon="mdi:window-open-variant",
                 entity_category="diagnostic",
+                device_class="window",
             )
         )
 
@@ -314,6 +314,7 @@ class TRV(EntityBase):
                 True,
                 "mdi:pipe-valve",
                 "diagnostic",
+                "opening",
             )
         )
 
@@ -443,6 +444,7 @@ class PIDClimate(EntityBase):
                 "pid_active",
                 "PID active",
                 entity_category="diagnostic",
+                device_class="running"
             )
         )
         self.pid_proportional_sensor = self.register_mqtt_entity(
