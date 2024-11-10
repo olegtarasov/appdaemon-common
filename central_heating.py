@@ -8,6 +8,7 @@ from simple_pid import PID
 
 from event_hook import EventHook
 from mqtt_entites import (
+    CH_NAMESPACE,
     MQTTBinarySensor,
     MQTTClimate,
     MQTTDevice,
@@ -191,9 +192,9 @@ class RoomConfig:
 
 class EntityBase:
     def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
-        self.api = api
-        self.mqtt = mqtt
-        self.config = config
+        self._api = api
+        self._mqtt = mqtt
+        self._config = config
 
         self._entities: list[MQTTEntityBase] = []
 
@@ -222,7 +223,7 @@ class Window(EntityBase):
         self.on_window_changed = EventHook()
 
         # MQTT
-        self.window_open_sensor = self.register_mqtt_entity(
+        self._window_open_sensor = self.register_mqtt_entity(
             MQTTBinarySensor(
                 api,
                 mqtt,
@@ -236,7 +237,7 @@ class Window(EntityBase):
 
         # Subscribe
         for sensor in config.window_sensors:
-            self.api.listen_state(self._on_window, sensor)
+            self._api.listen_state(self._handle_window, sensor)
 
         # State
         self._last_open = False
@@ -245,8 +246,8 @@ class Window(EntityBase):
     @property
     def window_open(self) -> bool:
         result = False
-        for sensor in self.config.window_sensors:
-            result = result or (get_state_bool(self.api, sensor) or False)
+        for sensor in self._config.window_sensors:
+            result = result or (get_state_bool(self._api, sensor) or False)
 
         return result
 
@@ -261,7 +262,7 @@ class Window(EntityBase):
             if (
                 not window_open
                 and self._warmup_time is not None
-                and cast(timedelta, self.api.get_now()) >= self._warmup_time
+                and cast(timedelta, self._api.get_now()) >= self._warmup_time
             ):
                 # Window is closed and it stayed closed for warmup time after being open
                 # We enable PID once again setting integral term to equal last output
@@ -277,17 +278,17 @@ class Window(EntityBase):
                 self._warmup_time = None
             else:
                 # If the window got closed, we calculate warmup time after which we should restart PID
-                self._warmup_time = cast(timedelta, self.api.get_now()) + timedelta(
+                self._warmup_time = cast(timedelta, self._api.get_now()) + timedelta(
                     minutes=10
                 )
 
         return not window_open and self._warmup_time is None
 
     def report_state(self) -> None:
-        self.window_open_sensor.state = self.window_open
+        self._window_open_sensor.state = self.window_open
 
     # Handlers
-    def _on_window(self, entity, attribute, old: str, new: str, cb_args):
+    def _handle_window(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
         self.should_heat()
         self.on_window_changed()
@@ -301,10 +302,10 @@ class TRV(EntityBase):
         super().__init__(api, mqtt, config)
 
         # Events
-        self.on_trv = EventHook()
+        self.on_trv_changed = EventHook()
 
         # MQTT
-        self.trv_sensor = self.register_mqtt_entity(
+        self._trv_sensor = self.register_mqtt_entity(
             MQTTBinarySensor(
                 api,
                 mqtt,
@@ -320,43 +321,43 @@ class TRV(EntityBase):
 
         # Subscribe
         for trv in config.trvs:
-            self.api.listen_state(self._on_trv, trv)
+            self._api.listen_state(self._handle_trv, trv)
 
     @property
     def trv_open(self) -> bool:
         result = False
-        for trv in self.config.trvs:
-            result = result or self.api.get_state(trv) == "heat"
+        for trv in self._config.trvs:
+            result = result or self._api.get_state(trv) == "heat"
 
         return result
 
     def operate_trv(self, pid_output: float):
         if pid_output > 0:
-            self.open_trvs()
+            self._open_trvs()
         else:
-            self.close_trvs()
+            self._close_trvs()
 
         self.report_state()
 
-    def open_trvs(self):
-        for trv in self.config.trvs:
-            self.api.call_service(
+    def report_state(self) -> None:
+        self._trv_sensor.state = self.trv_open
+
+    def _open_trvs(self):
+        for trv in self._config.trvs:
+            self._api.call_service(
                 "climate/set_hvac_mode", entity_id=trv, hvac_mode="heat"
             )
 
-    def close_trvs(self):
-        for trv in self.config.trvs:
-            self.api.call_service(
+    def _close_trvs(self):
+        for trv in self._config.trvs:
+            self._api.call_service(
                 "climate/set_hvac_mode", entity_id=trv, hvac_mode="off"
             )
 
-    def report_state(self) -> None:
-        self.trv_sensor.state = self.trv_open
-
     # Handlers
-    def _on_trv(self, entity, attribute, old: str, new: str, cb_args):
+    def _handle_trv(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
-        self.on_trv()
+        self.on_trv_changed()
 
 
 class FloorClimate(EntityBase):
@@ -367,50 +368,46 @@ class FloorClimate(EntityBase):
         super().__init__(api, mqtt, config)
 
         # Events
-        self.on_floor_temp = EventHook()
+        self.on_floor_temp_changed = EventHook()
 
         # MQTT
-        self.floor_climate = self.register_mqtt_entity(
+        self.climate = self.register_mqtt_entity(
             MQTTClimate(
                 api, mqtt, config.room_code, "floor_climate", "Floor", False, True, 28
             )
         )
 
         # Subscribe
-        self.api.listen_state(self._on_floor_temp, self.config.floor_temp_sensor)
+        self._api.listen_state(self._handle_floor_temp, self._config.floor_temp_sensor)
 
     @property
     def floor_temp(self) -> Optional[float]:
-        return get_state_float(self.api, self.config.floor_temp_sensor)
+        return get_state_float(self._api, self._config.floor_temp_sensor)
 
     def report_state(self) -> None:
-        self.floor_climate.current_temperature = self.floor_temp
+        self.climate.current_temperature = self.floor_temp
 
-    def _on_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
+    def _handle_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
-        self.on_floor_temp()
+        self.on_floor_temp_changed()
 
 
 class PIDClimate(EntityBase):
     def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
         super().__init__(api, mqtt, config)
 
-        self.api = api
-        self.mqtt = mqtt
-        self.config = config
-
         # Events
-        self.on_room_temp = EventHook()
+        self.on_room_temp_changed = EventHook()
 
         # MQTT
         self.climate = self.register_mqtt_entity(
-            MQTTClimate(api, mqtt, self.config.room_code, "room_climate", "Room")
+            MQTTClimate(api, mqtt, self._config.room_code, "room_climate", "Room")
         )
         self.pid_kp = self.register_mqtt_entity(
             MQTTNumber(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_kp",
                 "PID kp",
                 0.5,
@@ -425,7 +422,7 @@ class PIDClimate(EntityBase):
             MQTTNumber(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_ki",
                 "PID ki",
                 0.001,
@@ -440,7 +437,7 @@ class PIDClimate(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_active",
                 "PID active",
                 entity_category="diagnostic",
@@ -451,7 +448,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_proportional",
                 "PID Proportional",
                 icon="mdi:gauge",
@@ -462,7 +459,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_integral",
                 "PID Integral",
                 icon="mdi:gauge",
@@ -473,7 +470,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                self.config.room_code,
+                self._config.room_code,
                 "pid_output",
                 "PID Output",
                 icon="mdi:gauge",
@@ -482,10 +479,10 @@ class PIDClimate(EntityBase):
         )
 
         # Events
-        self.climate.on_mode_changed += self._on_room_mode_changed
-        self.climate.on_temperature_changed += self._on_room_setpoint_changed
-        self.pid_kp.on_state_changed += self._on_pid_kp_changed
-        self.pid_ki.on_state_changed += self._on_pid_ki_changed
+        self.climate.on_mode_changed += self._handle_mode
+        self.climate.on_temperature_changed += self._handle_setpoint
+        self.pid_kp.on_state_changed += self._handle_pid_kp
+        self.pid_ki.on_state_changed += self._handle_pid_ki
 
         # Private
         self._pid = PID(
@@ -500,11 +497,11 @@ class PIDClimate(EntityBase):
         self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled]
 
         # Subscribe to sensors
-        self.api.listen_state(self._on_room_temp, self.config.floor_temp_sensor)
+        self._api.listen_state(self._handle_room_temp, self._config.room_temp_sensor)
 
     @property
     def room_temp(self) -> Optional[float]:
-        return get_state_float(self.api, self.config.room_temp_sensor)
+        return get_state_float(self._api, self._config.room_temp_sensor)
 
     @property
     def hinged_output(self) -> float:
@@ -526,8 +523,8 @@ class PIDClimate(EntityBase):
 
         cur_temp = self.room_temp
         if cur_temp is None:
-            self.api.log(
-                "Failed to get room temperature for room %s", self.config.room_name
+            self._api.log(
+                "Failed to get room temperature for room %s", self._config.room_name
             )
             return
 
@@ -540,6 +537,27 @@ class PIDClimate(EntityBase):
         self.pid_integral_sensor.state = self._pid.components[1]
         self.pid_output_sensor.state = self._output
         self.climate.current_temperature = self.room_temp
+
+    def apply_preset(self, preset: dict[str, Any]):
+        self.climate.mode = preset["mode"] if "mode" in preset else "off"
+        self._handle_mode()
+
+        self.climate.temperature = (
+            preset["room_setpoint"]
+            if "room_setpoint" in preset
+            else self.climate.default_temperature
+        )
+        self._handle_setpoint()
+
+        self.pid_kp.state = (
+            preset["kp"] if "kp" in preset else self.pid_kp.default_value
+        )
+        self._handle_pid_kp()
+
+        self.pid_ki.state = (
+            preset["ki"] if "ki" in preset else self.pid_ki.default_value
+        )
+        self._handle_pid_ki()
 
     def _recalculate_pid_enabled(self):
         result = True
@@ -563,21 +581,20 @@ class PIDClimate(EntityBase):
         self.report_state()
 
     # Handlers
-    def _on_room_mode_changed(self):
+    def _handle_mode(self):
         self._recalculate_pid_enabled()
 
-    def _on_room_setpoint_changed(self):
+    def _handle_setpoint(self):
         self._pid.setpoint = self.climate.temperature
 
-    def _on_pid_kp_changed(self):
+    def _handle_pid_kp(self):
         self._pid.Kp = self.pid_kp.state
 
-    def _on_pid_ki_changed(self):
+    def _handle_pid_ki(self):
         self._pid.Ki = self.pid_ki.state
 
-    def _on_room_temp(self, entity, attribute, old: str, new: str, cb_args):
+    def _handle_room_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.climate.current_temperature = self.room_temp
-        self.on_room_temp()
 
 
 class Room:
@@ -588,41 +605,48 @@ class Room:
         control_heating_callback,
         config: dict[str, Any],
     ):
-        self.api = api
-        self.mqtt = mqtt
-        self.config = RoomConfig(config)
+        self._api = api
+        self._mqtt = mqtt
+        self._config = RoomConfig(config)
 
-        self.entities: list[EntityBase] = []
+        self._entities: list[EntityBase] = []
 
         # Create room entities based on config
-        self.room_climate = self._add_entity(PIDClimate(api, mqtt, self.config))
+        self.room_climate = self._add_entity(PIDClimate(api, mqtt, self._config))
         self.floor_climate = self._add_entity(
-            FloorClimate(api, mqtt, self.config)
-            if self.config.floor_temp_sensor is not None
+            FloorClimate(api, mqtt, self._config)
+            if self._config.floor_temp_sensor is not None
             else None
         )
         self.window = self._add_entity(
-            Window(api, mqtt, self.config)
-            if self.config.window_sensors is not None
+            Window(api, mqtt, self._config)
+            if self._config.window_sensors is not None
             else None
         )
         self.trv = self._add_entity(
-            TRV(api, mqtt, self.config) if self.config.trvs is not None else None
+            TRV(api, mqtt, self._config) if self._config.trvs is not None else None
         )
 
         # Entity-specific config
         if self.window is not None:
             self.room_climate.register_pid_enabler(self.window.should_heat)
 
+        # Subscribe to events
+        self.room_climate.climate.on_mode_changed += self._handle_room_mode
+        self.room_climate.climate.on_preset_changed += self._handle_room_preset
+        self.room_climate.climate.on_temperature_changed += self._handle_room_setpoint
+        self.room_climate.pid_kp.on_state_changed += self._handle_room_pid_kp
+        self.room_climate.pid_ki.on_state_changed += self._handle_room_pid_ki
+
         # Collect MQTT entities and perform entity-specific configuration
         entities_mqtt = []
-        for entity in self.entities:
+        for entity in self._entities:
             entities_mqtt.extend(entity.mqtt_entities)
 
         # Create MQTT room device
-        self.room_device = MQTTDevice(
-            f"{self.config.room_code}_device",
-            self.config.room_name,
+        self._room_device = MQTTDevice(
+            f"{self._config.room_code}_thermostat",
+            f"{self._config.room_name} Thermostat",
             "Virtual Room Thermostat",
             entities_mqtt,
         )
@@ -634,8 +658,9 @@ class Room:
             self.trv.report_state()
 
     def configure(self):
-        self.room_device.configure()
-        for entity in self.entities:
+        self._room_device.configure()
+        self._load_preset()
+        for entity in self._entities:
             entity.report_state()
 
     TEntity = TypeVar("TEntity", bound=EntityBase)
@@ -643,8 +668,62 @@ class Room:
     def _add_entity(self, entity: Optional[TEntity]) -> Optional[TEntity]:
         if entity is None:
             return None
-        self.entities.append(entity)
+        self._entities.append(entity)
         return entity
 
+    def _save_preset(self):
+        self._api.set_state(
+            f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
+            attributes={
+                "mode": self.room_climate.climate.mode,
+                "room_setpoint": self.room_climate.climate.temperature,
+                "floor_setpoint": self.floor_climate.climate.temperature,
+                "kp": self.room_climate.pid_kp.state,
+                "ki": self.room_climate.pid_ki.state,
+            },
+            namespace=CH_NAMESPACE,
+        )
+
+    def _load_preset(self):
+        preset = cast(
+            dict,
+            self._api.get_state(
+                f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
+                attribute="all",
+                namespace=CH_NAMESPACE,
+            ),
+        )
+        if (
+            preset is None
+            or "attributes" not in preset
+            or len(preset["attributes"]) == 0
+        ):
+            self._api.log("Loaded empty preset, saving current values")
+            self._save_preset()
+            return
+
+        attributes = preset["attributes"]
+        self._api.log(
+            "Loaded preset %s: %s", self.room_climate.climate.preset, attributes
+        )
+
+        self.room_climate.apply_preset(attributes)
+
+    # Handlers
+    def _handle_room_mode(self):
+        self._save_preset()
+
+    def _handle_room_preset(self):
+        self._load_preset()
+
+    def _handle_room_setpoint(self):
+        self._save_preset()
+
+    def _handle_room_pid_kp(self):
+        self._save_preset()
+
+    def _handle_room_pid_ki(self):
+        self._save_preset()
+
     def __repr__(self):
-        return f"{self.config.room_name}:\n"
+        return f"{self._config.room_name}:\n"

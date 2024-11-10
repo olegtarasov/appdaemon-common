@@ -28,7 +28,9 @@ central_heating:
       room_temp_sensor: sensor.sensotron_living_room_temperature
       floor_temp_sensor: sensor.sensotron_living_room_floor_temperature
       trv: climate.trv_living_room
-      window_sensor: binary_sensor.window_living_room_contact
+      window_sensor:
+        - binary_sensor.window_living_room_contact
+        - binary_sensor.window_kitchen_contact
     - name: Bedroom
       code: bedroom
       room_temp_sensor: sensor.sensotron_bedroom_temperature

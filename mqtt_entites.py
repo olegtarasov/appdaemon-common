@@ -1,5 +1,4 @@
 import json
-import traceback
 from typing import Any, Callable, Iterable, Optional, cast
 
 from appdaemon import adapi
@@ -39,15 +38,15 @@ class MQTTEntityBase:
         self.mqtt = mqtt
         self.kwargs = kwargs
         self.entity_id = f"{room_code}_{entity_code}"
-        self.full_entity_id = f"{self.entity_type}.{self.entity_id}"
+        self.full_entity_id = f"{self._entity_type}.{self.entity_id}"
         self.entity_name = entity_name
-        self.config_topic = f"homeassistant/{self.entity_type}/{self.entity_id}/config"
-
-    @property
-    def entity_type(self) -> str:
-        raise Exception()
+        self.config_topic = f"homeassistant/{self._entity_type}/{self.entity_id}/config"
 
     def configure(self, device: MQTTDevice) -> None:
+        raise Exception()
+
+    @property
+    def _entity_type(self) -> str:
         raise Exception()
 
     def _mqtt_subscribe(self, handler: Callable, topic: str):
@@ -121,24 +120,24 @@ class MQTTClimate(MQTTEntityBase):
 
         # Topics
         self.mode_command_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/mode/set"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/mode/set"
         )
         self.mode_state_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/mode/state"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/mode/state"
         )
         self.preset_command_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/preset_mode/set"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/preset_mode/set"
         )
         self.preset_state_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/preset_mode/state"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/preset_mode/state"
         )
         self.temperature_command_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/temperature/set"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/temperature/set"
         )
         self.temperature_state_topic = (
-            f"homeassistant/{self.entity_type}/{self.entity_id}/temperature/state"
+            f"homeassistant/{self._entity_type}/{self.entity_id}/temperature/state"
         )
-        self.current_temperature_topic = f"homeassistant/{self.entity_type}/{self.entity_id}/current_temperature/state"
+        self.current_temperature_topic = f"homeassistant/{self._entity_type}/{self.entity_id}/current_temperature/state"
 
         # Non-persistent state
         self._current_temperature: float = 0
@@ -212,7 +211,7 @@ class MQTTClimate(MQTTEntityBase):
         self.mqtt.mqtt_publish(self.current_temperature_topic, value)
 
     @property
-    def entity_type(self) -> str:
+    def _entity_type(self) -> str:
         return "climate"
 
     def configure(self, device: MQTTDevice) -> None:
@@ -243,17 +242,17 @@ class MQTTClimate(MQTTEntityBase):
             config["preset_mode_state_topic"] = self.preset_state_topic
             config["preset_modes"] = ["home", "away", "sleep"]
 
-        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(self.config_topic, json.dumps(config))
 
         # Subscribe for commands
         if not self.heat_only:
-            self._mqtt_subscribe(self.handle_mode, self.mode_command_topic)
+            self._mqtt_subscribe(self._handle_mode, self.mode_command_topic)
 
         if self.has_presets:
-            self._mqtt_subscribe(self.handle_preset, self.preset_command_topic)
+            self._mqtt_subscribe(self._handle_preset, self.preset_command_topic)
 
-        self._mqtt_subscribe(self.handle_temperature, self.temperature_command_topic)
+        self._mqtt_subscribe(self._handle_temperature, self.temperature_command_topic)
 
         # Publish initial state
         self.mqtt.mqtt_publish(self.mode_state_topic, self.mode)
@@ -267,16 +266,16 @@ class MQTTClimate(MQTTEntityBase):
         )
 
     # Handlers
-    def handle_mode(self, event_name, data, cb_args):
+    def _handle_mode(self, event_name, data, cb_args):
         self.api.log("Climate %s mode changed: %s", self.entity_id, data)
         self.mode = self._get_string_payload(data)
         self.on_mode_changed()
 
-    def handle_preset(self, event_name, data, cb_args):
+    def _handle_preset(self, event_name, data, cb_args):
         self.preset = self._get_string_payload(data)
         self.on_preset_changed()
 
-    def handle_temperature(self, event_name, data, cb_args):
+    def _handle_temperature(self, event_name, data, cb_args):
         self.temperature = self._get_float_payload(data)
         self.on_temperature_changed()
 
@@ -309,8 +308,8 @@ class MQTTNumber(MQTTEntityBase):
         self.on_state_changed = EventHook()
 
         # Topics
-        self.command_topic = f"homeassistant/{self.entity_type}/{self.entity_id}/set"
-        self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
+        self.command_topic = f"homeassistant/{self._entity_type}/{self.entity_id}/set"
+        self.state_topic = f"homeassistant/{self._entity_type}/{self.entity_id}"
 
     @property
     def state(self) -> float:
@@ -333,7 +332,7 @@ class MQTTNumber(MQTTEntityBase):
         self.mqtt.mqtt_publish(self.state_topic, value)
 
     @property
-    def entity_type(self) -> str:
+    def _entity_type(self) -> str:
         return "number"
 
     def configure(self, device: MQTTDevice) -> None:
@@ -356,16 +355,16 @@ class MQTTNumber(MQTTEntityBase):
             **self.kwargs,
         }
 
-        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
         )
-        self._mqtt_subscribe(self.handle_state, self.command_topic)
+        self._mqtt_subscribe(self._handle_state, self.command_topic)
         self.mqtt.mqtt_publish(self.state_topic, self.state)
 
     # Handlers
-    def handle_state(self, event_name, data, cb_args):
+    def _handle_state(self, event_name, data, cb_args):
         self.state = self._get_float_payload(data)
         self.on_state_changed()
 
@@ -390,8 +389,8 @@ class MQTTSwitch(MQTTEntityBase):
         self.on_state_changed = EventHook()
 
         # Topics
-        self.command_topic = f"homeassistant/{self.entity_type}/{self.entity_id}/set"
-        self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
+        self.command_topic = f"homeassistant/{self._entity_type}/{self.entity_id}/set"
+        self.state_topic = f"homeassistant/{self._entity_type}/{self.entity_id}"
 
     @property
     def state(self) -> bool:
@@ -414,7 +413,7 @@ class MQTTSwitch(MQTTEntityBase):
         self.mqtt.mqtt_publish(self.state_topic, "on" if value else "off")
 
     @property
-    def entity_type(self) -> str:
+    def _entity_type(self) -> str:
         return "switch"
 
     def configure(self, device: MQTTDevice) -> None:
@@ -433,16 +432,16 @@ class MQTTSwitch(MQTTEntityBase):
             **self.kwargs,
         }
 
-        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
         )
-        self._mqtt_subscribe(self.handle_state, self.command_topic)
+        self._mqtt_subscribe(self._handle_state, self.command_topic)
         self.mqtt.mqtt_publish(self.state_topic, self.state)
 
     # Handlers
-    def handle_state(self, event_name, data, cb_args):
+    def _handle_state(self, event_name, data, cb_args):
         self.state = self._get_bool_payload(data)
         self.on_state_changed()
 
@@ -466,7 +465,7 @@ class MQTTSensor(MQTTEntityBase):
         self.state_class = state_class
 
         # Topics
-        self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
+        self.state_topic = f"homeassistant/{self._entity_type}/{self.entity_id}"
 
     @property
     def state(self) -> float:
@@ -489,7 +488,7 @@ class MQTTSensor(MQTTEntityBase):
         self.mqtt.mqtt_publish(self.state_topic, value)
 
     @property
-    def entity_type(self) -> str:
+    def _entity_type(self) -> str:
         return "sensor"
 
     def configure(self, device: MQTTDevice) -> None:
@@ -508,7 +507,7 @@ class MQTTSensor(MQTTEntityBase):
             **self.kwargs,
         }
 
-        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
@@ -533,7 +532,7 @@ class MQTTBinarySensor(MQTTEntityBase):
         self.default_value = default_value
 
         # Topics
-        self.state_topic = f"homeassistant/{self.entity_type}/{self.entity_id}"
+        self.state_topic = f"homeassistant/{self._entity_type}/{self.entity_id}"
 
     @property
     def state(self) -> bool:
@@ -556,7 +555,7 @@ class MQTTBinarySensor(MQTTEntityBase):
         self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF")
 
     @property
-    def entity_type(self) -> str:
+    def _entity_type(self) -> str:
         return "binary_sensor"
 
     def configure(self, device: MQTTDevice) -> None:
@@ -574,7 +573,7 @@ class MQTTBinarySensor(MQTTEntityBase):
             **self.kwargs,
         }
 
-        self.api.log(f"Configuring {self.entity_type} entity %s", self.entity_id)
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
         self.mqtt.mqtt_publish(
             self.config_topic,
             json.dumps(config),
