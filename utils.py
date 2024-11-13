@@ -40,7 +40,7 @@ async def get_state_bool(
     if isinstance(value, bool):
         return value
     try:
-        return to_bool(value.lower())
+        return str_to_bool(value.lower())
     except:
         api.log(
             "Failed to get bool value for entity %s. Received: %s, type: %s",
@@ -51,7 +51,7 @@ async def get_state_bool(
         return None
 
 
-def to_bool(value: str) -> Optional[bool]:
+def str_to_bool(value: str) -> Optional[bool]:
     if value in bool_true:
         return True
     elif value in bool_false:

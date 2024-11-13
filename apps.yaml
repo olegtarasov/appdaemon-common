@@ -9,6 +9,20 @@ mqtt_entities:
   module: mqtt_entites
   global: true
 
+sleep_tracker_oleg:
+  module: sleep_tracker
+  class: SleepTracker
+  dependencies:
+    - utils
+    - event_hook
+    - mqtt_entities
+    - user_namespace
+  person_code: oleg
+  person_name: Oleg
+  sleep_event_id: "Oleg sleeps"
+  bed_time_entity: input_datetime.bed_time
+  wake_up_entity: input_datetime.wake_up_time
+
 central_heating:
   module: central_heating
   class: CentralHeating
@@ -16,6 +30,7 @@ central_heating:
     - utils
     - event_hook
     - mqtt_entities
+    - user_namespace
   rooms:
     - name: Mancave
       code: mancave

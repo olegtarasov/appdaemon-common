@@ -1,13 +1,12 @@
 import json
-from typing import Any, Callable, Iterable, Optional, cast
+from typing import Any, Callable, Iterable, Optional
 
 from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 
 from event_hook import EventHook
-from utils import get_state_bool, get_state_float, to_bool
-
-CH_NAMESPACE = "central_heating"
+from user_namespace import UserNamespace
+from utils import str_to_bool
 
 
 class MQTTDevice:
@@ -29,15 +28,19 @@ class MQTTEntityBase:
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: Optional[str],
         entity_code: str,
         entity_name: str,
         kwargs: dict[str, Any],
     ) -> None:
         self.api = api
         self.mqtt = mqtt
+        self.namespace = namespace
         self.kwargs = kwargs
-        self.entity_id = f"{room_code}_{entity_code}"
+        self.entity_id = (
+            f"{prefix}_{entity_code}" if prefix is not None else entity_code
+        )
         self.full_entity_id = f"{self._entity_type}.{self.entity_id}"
         self.entity_name = entity_name
         self.config_topic = f"homeassistant/{self._entity_type}/{self.entity_id}/config"
@@ -87,7 +90,7 @@ class MQTTEntityBase:
         if isinstance(payload, bool):
             return payload
         try:
-            return to_bool(payload)
+            return str_to_bool(payload)
         except:
             self.api.error("Failed to convert MQTT payload to bool: %s", payload)
             return default_value
@@ -98,7 +101,8 @@ class MQTTClimate(MQTTEntityBase):
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: str,
         entity_code: str,
         entity_name: str,
         has_presets=True,
@@ -106,7 +110,7 @@ class MQTTClimate(MQTTEntityBase):
         default_temperature=23.5,
         **kwargs,
     ) -> None:
-        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
 
         # Config
         self.has_presets = has_presets
@@ -144,59 +148,41 @@ class MQTTClimate(MQTTEntityBase):
 
     @property
     def mode(self) -> str:
-        return cast(
-            str,
-            self.api.get_state(
-                self.full_entity_id,
-                default="off" if not self.heat_only else "heat",
-                namespace=CH_NAMESPACE,
-            ),
+        return self.namespace.get_state(
+            self.full_entity_id, default="off" if not self.heat_only else "heat"
         )
 
     @mode.setter
     def mode(self, value: Optional[str]) -> None:
         if value is None:
             return
-        self.api.set_state(self.full_entity_id, state=value, namespace=CH_NAMESPACE)
+        self.namespace.set_state(self.full_entity_id, state=value)
         self.mqtt.mqtt_publish(self.mode_state_topic, value)
 
     @property
     def preset(self) -> str:
-        return cast(
-            str,
-            self.api.get_state(
-                self.full_entity_id, "preset", "home", namespace=CH_NAMESPACE
-            ),
-        )
+        return self.namespace.get_state(self.full_entity_id, "preset", "home")
 
     @preset.setter
     def preset(self, value: Optional[str]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id, attributes={"preset": value}, namespace=CH_NAMESPACE
-        )
+        self.namespace.set_state(self.full_entity_id, attributes={"preset": value})
         self.mqtt.mqtt_publish(self.preset_state_topic, value)
 
     @property
     def temperature(self) -> float:
-        return get_state_float(
-            self.api,
+        return self.namespace.get_state_float(
             self.full_entity_id,
             "temperature",
             self.default_temperature,
-            namespace=CH_NAMESPACE,
         )
 
     @temperature.setter
     def temperature(self, value: Optional[float]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id,
-            attributes={"temperature": value},
-            namespace=CH_NAMESPACE,
-        )
+        self.namespace.set_state(self.full_entity_id, attributes={"temperature": value})
         self.mqtt.mqtt_publish(self.temperature_state_topic, value)
 
     @property
@@ -285,7 +271,8 @@ class MQTTNumber(MQTTEntityBase):
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: str,
         entity_code: str,
         entity_name: str,
         default_value: float = 0,
@@ -295,7 +282,7 @@ class MQTTNumber(MQTTEntityBase):
         mode: str = "box",
         **kwargs,
     ) -> None:
-        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -313,22 +300,15 @@ class MQTTNumber(MQTTEntityBase):
 
     @property
     def state(self) -> float:
-        return get_state_float(
-            self.api,
-            self.full_entity_id,
-            default=self.default_value,
-            namespace=CH_NAMESPACE,
+        return self.namespace.get_state_float(
+            self.full_entity_id, default=self.default_value
         )
 
     @state.setter
     def state(self, value: Optional[float]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id,
-            state=value,
-            namespace=CH_NAMESPACE,
-        )
+        self.namespace.set_state(self.full_entity_id, state=value)
         self.mqtt.mqtt_publish(self.state_topic, value)
 
     @property
@@ -374,13 +354,14 @@ class MQTTSwitch(MQTTEntityBase):
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: str,
         entity_code: str,
         entity_name: str,
         default_value: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -394,22 +375,15 @@ class MQTTSwitch(MQTTEntityBase):
 
     @property
     def state(self) -> bool:
-        return get_state_bool(
-            self.api,
-            self.full_entity_id,
-            default=self.default_value,
-            namespace=CH_NAMESPACE,
+        return self.namespace.get_state_bool(
+            self.full_entity_id, default=self.default_value
         )
 
     @state.setter
     def state(self, value: Optional[bool]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id,
-            state="on" if value else "off",
-            namespace=CH_NAMESPACE,
-        )
+        self.namespace.set_state(self.full_entity_id, state="on" if value else "off")
         self.mqtt.mqtt_publish(self.state_topic, "on" if value else "off")
 
     @property
@@ -451,14 +425,15 @@ class MQTTSensor(MQTTEntityBase):
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: str,
         entity_code: str,
         entity_name: str,
         default_value: float = 0,
         state_class: str = "measurement",
         **kwargs,
     ) -> None:
-        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -469,22 +444,15 @@ class MQTTSensor(MQTTEntityBase):
 
     @property
     def state(self) -> float:
-        return get_state_float(
-            self.api,
-            self.full_entity_id,
-            default=self.default_value,
-            namespace=CH_NAMESPACE,
+        return self.namespace.get_state_float(
+            self.full_entity_id, default=self.default_value
         )
 
     @state.setter
     def state(self, value: Optional[float]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id,
-            state=value,
-            namespace=CH_NAMESPACE,
-        )
+        self.namespace.set_state(self.full_entity_id, state=value)
         self.mqtt.mqtt_publish(self.state_topic, value)
 
     @property
@@ -520,13 +488,14 @@ class MQTTBinarySensor(MQTTEntityBase):
         self,
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
-        room_code: str,
+        namespace: UserNamespace,
+        prefix: Optional[str],
         entity_code: str,
         entity_name: str,
         default_value: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(api, mqtt, room_code, entity_code, entity_name, kwargs)
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
 
         # Config
         self.default_value = default_value
@@ -536,22 +505,15 @@ class MQTTBinarySensor(MQTTEntityBase):
 
     @property
     def state(self) -> bool:
-        return get_state_bool(
-            self.api,
-            self.full_entity_id,
-            default=self.default_value,
-            namespace=CH_NAMESPACE,
+        return self.namespace.get_state_bool(
+            self.full_entity_id, default=self.default_value
         )
 
     @state.setter
     def state(self, value: Optional[bool]) -> None:
         if value is None:
             return
-        self.api.set_state(
-            self.full_entity_id,
-            state="ON" if value else "OFF",
-            namespace=CH_NAMESPACE,
-        )
+        self.namespace.set_state(self.full_entity_id, state="ON" if value else "OFF")
         self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF")
 
     @property

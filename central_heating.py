@@ -8,7 +8,6 @@ from simple_pid import PID
 
 from event_hook import EventHook
 from mqtt_entites import (
-    CH_NAMESPACE,
     MQTTBinarySensor,
     MQTTClimate,
     MQTTDevice,
@@ -16,6 +15,7 @@ from mqtt_entites import (
     MQTTNumber,
     MQTTSensor,
 )
+from user_namespace import UserNamespace
 from utils import get_state_bool, get_state_float
 
 
@@ -26,6 +26,9 @@ from utils import get_state_bool, get_state_float
 # TODO: Add HA automation and sensor that disables HA PIDs when AppDaemon crashes (some kind of a deadman switch)
 # BUG: TRV doesn't close according to rules
 # BUG: Boiler starts to heat, but TRV is still closed due to hysteresis. Boiler and pumps should use the same hysteresis
+
+PID_HINGE = 0.01
+CENRAL_HEATING_NS = "central_heating"
 
 
 # noinspection PyAttributeOutsideInit
@@ -52,12 +55,14 @@ class CentralHeating(hass.Hass):
         self.log("Room config:\n%s", self.rooms)
 
         # Master thermostat MQTT device
+        namespace = UserNamespace(self, CENRAL_HEATING_NS)
         self.master_room_climate = MQTTClimate(
-            self, mqtt, "master", "room_climate", "Room", False
+            self, mqtt, namespace, "master", "room_climate", "Room", False
         )
         self.master_pid_output = MQTTSensor(
             self,
             mqtt,
+            namespace,
             "master",
             "pid_output",
             "PID Output",
@@ -227,6 +232,7 @@ class Window(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 config.room_code,
                 "window_open",
                 "Window",
@@ -309,6 +315,7 @@ class TRV(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 config.room_code,
                 "trv_open",
                 "TRV",
@@ -373,7 +380,15 @@ class FloorClimate(EntityBase):
         # MQTT
         self.climate = self.register_mqtt_entity(
             MQTTClimate(
-                api, mqtt, config.room_code, "floor_climate", "Floor", False, True, 28
+                api,
+                mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
+                config.room_code,
+                "floor_climate",
+                "Floor",
+                False,
+                True,
+                28,
             )
         )
 
@@ -401,12 +416,20 @@ class PIDClimate(EntityBase):
 
         # MQTT
         self.climate = self.register_mqtt_entity(
-            MQTTClimate(api, mqtt, self._config.room_code, "room_climate", "Room")
+            MQTTClimate(
+                api,
+                mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
+                self._config.room_code,
+                "room_climate",
+                "Room",
+            )
         )
         self.pid_kp = self.register_mqtt_entity(
             MQTTNumber(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_kp",
                 "PID kp",
@@ -422,6 +445,7 @@ class PIDClimate(EntityBase):
             MQTTNumber(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_ki",
                 "PID ki",
@@ -437,6 +461,7 @@ class PIDClimate(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_active",
                 "PID active",
@@ -448,6 +473,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_proportional",
                 "PID Proportional",
@@ -459,6 +485,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_integral",
                 "PID Integral",
@@ -470,6 +497,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_output",
                 "PID Output",
@@ -494,6 +522,7 @@ class PIDClimate(EntityBase):
             (-1, 1),
         )
         self._output = 0
+        self._last_returned_output = 0
         self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled]
 
         # Subscribe to sensors
@@ -505,7 +534,17 @@ class PIDClimate(EntityBase):
 
     @property
     def hinged_output(self) -> float:
-        return self._output if self._output > 0.01 or self._output < -0.01 else 0
+        if not self._pid.auto_mode:
+            return 0
+        if self._output < -PID_HINGE or self._output > PID_HINGE:
+            self._last_returned_output = self._output
+            return self._last_returned_output
+
+        # PID value inside the hinge, clamp to hinge boundary based on last returned value
+        self._last_returned_output = (
+            -PID_HINGE if self._last_returned_output < 0 else PID_HINGE
+        )
+        return self._last_returned_output
 
     @property
     def enabled(self) -> bool:
@@ -577,6 +616,7 @@ class PIDClimate(EntityBase):
         else:
             self._pid.set_auto_mode(False)
             self._output = 0
+            self._last_returned_output = 0
 
         self.report_state()
 
@@ -608,6 +648,7 @@ class Room:
         self._api = api
         self._mqtt = mqtt
         self._config = RoomConfig(config)
+        self._namespace = UserNamespace(api, CENRAL_HEATING_NS)
 
         self._entities: list[EntityBase] = []
 
@@ -654,8 +695,10 @@ class Room:
     def control_room_temperature(self):
         self.room_climate.claculate_output()
         if self.trv is not None:
+            if self.window is not None and not self.window.should_heat():
+                # Don't bother with TRV when window is open — just to save TRV battery
+                return
             self.trv.operate_trv(self.room_climate.hinged_output)
-            self.trv.report_state()
 
     def configure(self):
         self._room_device.configure()
@@ -672,7 +715,7 @@ class Room:
         return entity
 
     def _save_preset(self):
-        self._api.set_state(
+        self._namespace.set_state(
             f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
             attributes={
                 "mode": self.room_climate.climate.mode,
@@ -681,16 +724,14 @@ class Room:
                 "kp": self.room_climate.pid_kp.state,
                 "ki": self.room_climate.pid_ki.state,
             },
-            namespace=CH_NAMESPACE,
         )
 
     def _load_preset(self):
         preset = cast(
             dict,
-            self._api.get_state(
+            self._namespace.get_state(
                 f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
                 attribute="all",
-                namespace=CH_NAMESPACE,
             ),
         )
         if (
