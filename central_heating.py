@@ -4,7 +4,6 @@ from typing import Any, Callable, Optional, TypeVar, cast
 from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 import appdaemon.plugins.hass.hassapi as hass
-from simple_pid import PID
 
 from event_hook import EventHook
 from mqtt_entites import (
@@ -17,17 +16,19 @@ from mqtt_entites import (
 )
 from user_namespace import UserNamespace
 from utils import get_state_bool, get_state_float
-
+from simple_pid import PID
 
 # TODO: Start pumps and open all TRVs on app shutdown or error
 # TODO: Also do this when thermsostat gets disconnected
 # TODO: When critical sensors are not available, open TRV and pause PID
-# TODO: Disable PID for rooms where TRV is closed due to rules
 # TODO: Add HA automation and sensor that disables HA PIDs when AppDaemon crashes (some kind of a deadman switch)
-# BUG: TRV doesn't close according to rules
-# BUG: Boiler starts to heat, but TRV is still closed due to hysteresis. Boiler and pumps should use the same hysteresis
+# TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
+# TODO: MQTT entities still loose initial state. Reproduced when AppDaemon addon was off, everything else on. After
+# starting AD, initial state of climate entities was not sent.
+# TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
+#  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
 
-PID_HINGE = 0.01
+PID_HINGE = 0.03
 CENRAL_HEATING_NS = "central_heating"
 
 
@@ -39,17 +40,17 @@ class CentralHeating(hass.Hass):
             raise Exception("MQTT not connected")
 
         # Config
-        self.pump_radiators: Optional[str] = (
-            self.args["pump_radiators"] if "pump_radiators" in self.args else None
-        )
-        self.pump_floor: Optional[str] = (
-            self.args["pump_floor"] if "pump_floor" in self.args else None
+        self.global_config = GlobalConfig(self.args)
+        self.log(
+            "Use hinge: %s, type %s",
+            self.global_config.use_hinge,
+            type(self.global_config.use_hinge),
         )
 
         # Init rooms
         self.rooms: list[Room] = []
         for item in self.args["rooms"]:
-            room = Room(self, mqtt, self.control_heating, item)
+            room = Room(self, mqtt, self.control_heating, item, self.global_config)
             self.rooms.append(room)
 
         self.log("Room config:\n%s", self.rooms)
@@ -95,12 +96,12 @@ class CentralHeating(hass.Hass):
     def control_heating(self):
         pid_output, any_trv_open = self.update_state()
         if pid_output > 0:
-            self.start_pump(self.pump_floor)
+            self.start_pump(self.global_config.pump_floor)
             if any_trv_open:
-                self.start_pump(self.pump_radiators)
+                self.start_pump(self.global_config.pump_radiators)
         else:
-            self.stop_pump(self.pump_floor)
-            self.stop_pump(self.pump_radiators)
+            self.stop_pump(self.global_config.pump_floor)
+            self.stop_pump(self.global_config.pump_radiators)
 
     def update_state(self) -> (float, bool):
         room_temp = 100
@@ -164,6 +165,17 @@ class CentralHeating(hass.Hass):
             self.call_service("switch/turn_off", entity_id=pump)
 
 
+class GlobalConfig:
+    def __init__(self, config: dict[str, Any]):
+        self.use_hinge = config["use_hinge"] if "use_hinge" in config else True
+        self.pump_radiators: Optional[str] = (
+            config["pump_radiators"] if "pump_radiators" in config else None
+        )
+        self.pump_floor: Optional[str] = (
+            config["pump_floor"] if "pump_floor" in config else None
+        )
+
+
 class RoomConfig:
     def __init__(self, config: dict[str, Any]):
         if "name" not in config:
@@ -181,7 +193,7 @@ class RoomConfig:
         )
 
         self.trvs: Optional[list[str]] = None
-        if "trv" in config["trv"]:
+        if "trv" in config:
             self.trvs = (
                 config["trv"] if isinstance(config["trv"], list) else [config["trv"]]
             )
@@ -351,15 +363,19 @@ class TRV(EntityBase):
 
     def _open_trvs(self):
         for trv in self._config.trvs:
-            self._api.call_service(
-                "climate/set_hvac_mode", entity_id=trv, hvac_mode="heat"
-            )
+            is_open = self._api.get_state(trv) == "heat"
+            if not is_open:
+                self._api.call_service(
+                    "climate/set_hvac_mode", entity_id=trv, hvac_mode="heat"
+                )
 
     def _close_trvs(self):
         for trv in self._config.trvs:
-            self._api.call_service(
-                "climate/set_hvac_mode", entity_id=trv, hvac_mode="off"
-            )
+            is_open = self._api.get_state(trv) == "heat"
+            if is_open:
+                self._api.call_service(
+                    "climate/set_hvac_mode", entity_id=trv, hvac_mode="off"
+                )
 
     # Handlers
     def _handle_trv(self, entity, attribute, old: str, new: str, cb_args):
@@ -399,6 +415,13 @@ class FloorClimate(EntityBase):
     def floor_temp(self) -> Optional[float]:
         return get_state_float(self._api, self._config.floor_temp_sensor)
 
+    def apply_preset(self, preset: dict[str, Any]):
+        self.climate.temperature = (
+            preset["floor_setpoint"]
+            if "floor_setpoint" in preset
+            else self.climate.default_temperature
+        )
+
     def report_state(self) -> None:
         self.climate.current_temperature = self.floor_temp
 
@@ -408,8 +431,12 @@ class FloorClimate(EntityBase):
 
 
 class PIDClimate(EntityBase):
-    def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
+    def __init__(
+        self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig, use_hinge: bool
+    ):
         super().__init__(api, mqtt, config)
+
+        self.use_hinge = use_hinge
 
         # Events
         self.on_room_temp_changed = EventHook()
@@ -434,7 +461,7 @@ class PIDClimate(EntityBase):
                 "pid_kp",
                 "PID kp",
                 0.5,
-                0.000001,
+                0,
                 100000,
                 0.001,
                 icon="mdi:knob",
@@ -450,7 +477,7 @@ class PIDClimate(EntityBase):
                 "pid_ki",
                 "PID ki",
                 0.001,
-                0.000001,
+                0,
                 100000,
                 0.001,
                 icon="mdi:knob",
@@ -536,6 +563,10 @@ class PIDClimate(EntityBase):
     def hinged_output(self) -> float:
         if not self._pid.auto_mode:
             return 0
+
+        if not self.use_hinge:
+            return self._output
+
         if self._output < -PID_HINGE or self._output > PID_HINGE:
             self._last_returned_output = self._output
             return self._last_returned_output
@@ -643,17 +674,20 @@ class Room:
         api: adapi.ADAPI,
         mqtt: mqttapi.Mqtt,
         control_heating_callback,
-        config: dict[str, Any],
+        room_config: dict[str, Any],
+        global_config: GlobalConfig,
     ):
         self._api = api
         self._mqtt = mqtt
-        self._config = RoomConfig(config)
+        self._config = RoomConfig(room_config)
         self._namespace = UserNamespace(api, CENRAL_HEATING_NS)
 
         self._entities: list[EntityBase] = []
 
         # Create room entities based on config
-        self.room_climate = self._add_entity(PIDClimate(api, mqtt, self._config))
+        self.room_climate = self._add_entity(
+            PIDClimate(api, mqtt, self._config, global_config.use_hinge)
+        )
         self.floor_climate = self._add_entity(
             FloorClimate(api, mqtt, self._config)
             if self._config.floor_temp_sensor is not None
@@ -715,15 +749,19 @@ class Room:
         return entity
 
     def _save_preset(self):
+        attributes = {
+            "mode": self.room_climate.climate.mode,
+            "room_setpoint": self.room_climate.climate.temperature,
+            "kp": self.room_climate.pid_kp.state,
+            "ki": self.room_climate.pid_ki.state,
+        }
+
+        if self.floor_climate is not None:
+            attributes["floor_setpoint"] = self.floor_climate.climate.temperature
+
         self._namespace.set_state(
             f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
-            attributes={
-                "mode": self.room_climate.climate.mode,
-                "room_setpoint": self.room_climate.climate.temperature,
-                "floor_setpoint": self.floor_climate.climate.temperature,
-                "kp": self.room_climate.pid_kp.state,
-                "ki": self.room_climate.pid_ki.state,
-            },
+            attributes=attributes,
         )
 
     def _load_preset(self):
@@ -749,6 +787,8 @@ class Room:
         )
 
         self.room_climate.apply_preset(attributes)
+        if self.floor_climate is not None:
+            self.floor_climate.apply_preset(attributes)
 
     # Handlers
     def _handle_room_mode(self):

@@ -1,4 +1,7 @@
 ---
+simple_pid:
+  module: simple_pid
+  global: true
 utils:
   module: utils
   global: true
@@ -8,25 +11,29 @@ event_hook:
 mqtt_entities:
   module: mqtt_entites
   global: true
+user_namespace:
+  module: user_namespace
+  global: true
 
-sleep_tracker_oleg:
-  module: sleep_tracker
-  class: SleepTracker
-  dependencies:
-    - utils
-    - event_hook
-    - mqtt_entities
-    - user_namespace
-  person_code: oleg
-  person_name: Oleg
-  sleep_event_id: "Oleg sleeps"
-  bed_time_entity: input_datetime.bed_time
-  wake_up_entity: input_datetime.wake_up_time
+#sleep_tracker_oleg:
+#  module: sleep_tracker
+#  class: SleepTracker
+#  dependencies:
+#    - utils
+#    - event_hook
+#    - mqtt_entities
+#    - user_namespace
+#  person_code: oleg
+#  person_name: Oleg
+#  sleep_event_id: "Oleg sleeps"
+#  bed_time_entity: input_datetime.bed_time
+#  wake_up_entity: input_datetime.wake_up_time
 
 central_heating:
   module: central_heating
   class: CentralHeating
   dependencies:
+    - simple_pid
     - utils
     - event_hook
     - mqtt_entities
@@ -54,3 +61,4 @@ central_heating:
       window_sensor: binary_sensor.window_bedroom_contact
   pump_radiators: switch.switch_pump_radiators
   pump_floor: switch.switch_pump_floor
+  use_hinge: True
