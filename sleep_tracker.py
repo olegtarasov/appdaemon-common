@@ -1,12 +1,11 @@
 from typing import cast
 
 from datetime import datetime, time
-from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 import appdaemon.plugins.hass.hassapi as hass
 
-from mqtt_entites import MQTTBinarySensor, MQTTDevice
-from user_namespace import UserNamespace
+from framework.mqtt_entites import MQTTBinarySensor, MQTTDevice
+from framework.user_namespace import UserNamespace
 
 SLEEP_TRACKER_NS = "sleep_tracker"
 

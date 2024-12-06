@@ -5,8 +5,8 @@ from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 import appdaemon.plugins.hass.hassapi as hass
 
-from event_hook import EventHook
-from mqtt_entites import (
+from framework.event_hook import EventHook
+from framework.mqtt_entites import (
     MQTTBinarySensor,
     MQTTButton,
     MQTTClimate,
@@ -15,9 +15,9 @@ from mqtt_entites import (
     MQTTNumber,
     MQTTSensor,
 )
-from user_namespace import UserNamespace
-from utils import get_state_bool, get_state_float
-from simple_pid import PID
+from framework.user_namespace import UserNamespace
+from framework.utils import get_state_bool, get_state_float
+from framework.simple_pid import PID
 
 # TODO: Start pumps and open all TRVs on app shutdown or error
 # TODO: Also do this when thermsostat gets disconnected

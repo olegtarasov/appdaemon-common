@@ -1,20 +1,4 @@
 ---
-simple_pid:
-  module: simple_pid
-  global: true
-utils:
-  module: utils
-  global: true
-event_hook:
-  module: event_hook
-  global: true
-mqtt_entities:
-  module: mqtt_entites
-  global: true
-user_namespace:
-  module: user_namespace
-  global: true
-
 #sleep_tracker_oleg:
 #  module: sleep_tracker
 #  class: SleepTracker
@@ -36,12 +20,6 @@ user_namespace:
 central_heating:
   module: central_heating
   class: CentralHeating
-  dependencies:
-    - simple_pid
-    - utils
-    - event_hook
-    - mqtt_entities
-    - user_namespace
   rooms:
     - name: Mancave
       code: mancave
