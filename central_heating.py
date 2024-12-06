@@ -67,9 +67,10 @@ class CentralHeating(hass.Hass):
             "master",
             "pid_output",
             "PID Output",
+            send_all=True,
             icon="mdi:gauge",
             entity_category="diagnostic",
-            expire_after=60
+            expire_after=60,
         )
         self._master_device = MQTTDevice(
             "master_thermostat",
