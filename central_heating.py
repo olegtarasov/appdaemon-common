@@ -8,6 +8,7 @@ import appdaemon.plugins.hass.hassapi as hass
 from event_hook import EventHook
 from mqtt_entites import (
     MQTTBinarySensor,
+    MQTTButton,
     MQTTClimate,
     MQTTDevice,
     MQTTEntityBase,
@@ -23,8 +24,6 @@ from simple_pid import PID
 # TODO: When critical sensors are not available, open TRV and pause PID
 # TODO: Add HA automation and sensor that disables HA PIDs when AppDaemon crashes (some kind of a deadman switch)
 # TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
-# TODO: MQTT entities still loose initial state. Reproduced when AppDaemon addon was off, everything else on. After
-# starting AD, initial state of climate entities was not sent.
 # TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
 #  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
 
@@ -41,11 +40,6 @@ class CentralHeating(hass.Hass):
 
         # Config
         self.global_config = GlobalConfig(self.args)
-        self.log(
-            "Use hinge: %s, type %s",
-            self.global_config.use_hinge,
-            type(self.global_config.use_hinge),
-        )
 
         # Init rooms
         self.rooms: list[Room] = []
@@ -532,12 +526,24 @@ class PIDClimate(EntityBase):
                 entity_category="diagnostic",
             )
         )
+        self.reset_pid_integral_button = self.register_mqtt_entity(
+            MQTTButton(
+                api,
+                mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
+                self._config.room_code,
+                "reset_pid",
+                "Reset PID",
+                entity_category="config",
+            )
+        )
 
         # Events
         self.climate.on_mode_changed += self._handle_mode
         self.climate.on_temperature_changed += self._handle_setpoint
         self.pid_kp.on_state_changed += self._handle_pid_kp
         self.pid_ki.on_state_changed += self._handle_pid_ki
+        self.reset_pid_integral_button.on_press += self._handle_reset_pid
 
         # Private
         self._pid = PID(
@@ -664,6 +670,9 @@ class PIDClimate(EntityBase):
     def _handle_pid_ki(self):
         self._pid.Ki = self.pid_ki.state
 
+    def _handle_reset_pid(self):
+        self._pid.reset()
+
     def _handle_room_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.climate.current_temperature = self.room_temp
 
@@ -737,8 +746,6 @@ class Room:
     def configure(self):
         self._room_device.configure()
         self._load_preset()
-        for entity in self._entities:
-            entity.report_state()
 
     TEntity = TypeVar("TEntity", bound=EntityBase)
 

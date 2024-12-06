@@ -28,6 +28,10 @@ user_namespace:
 #  sleep_event_id: "Oleg sleeps"
 #  bed_time_entity: input_datetime.bed_time
 #  wake_up_entity: input_datetime.wake_up_time
+#
+#test_mqtt:
+#  module: test_mqtt
+#  class: TestMqtt
 
 central_heating:
   module: central_heating

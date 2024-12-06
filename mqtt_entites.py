@@ -6,7 +6,7 @@ from appdaemon.plugins.mqtt import mqttapi
 
 from event_hook import EventHook
 from user_namespace import UserNamespace
-from utils import str_to_bool
+from utils import get_state_bool, get_state_float, str_to_bool
 
 
 class MQTTDevice:
@@ -156,8 +156,13 @@ class MQTTClimate(MQTTEntityBase):
     def mode(self, value: Optional[str]) -> None:
         if value is None:
             return
+
+        state = self.api.get_state(self.full_entity_id)
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, state=value)
-        self.mqtt.mqtt_publish(self.mode_state_topic, value)
+        self.mqtt.mqtt_publish(self.mode_state_topic, value, retain=True)
 
     @property
     def preset(self) -> str:
@@ -167,8 +172,13 @@ class MQTTClimate(MQTTEntityBase):
     def preset(self, value: Optional[str]) -> None:
         if value is None:
             return
+
+        state = self.api.get_state(self.full_entity_id, "preset")
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, attributes={"preset": value})
-        self.mqtt.mqtt_publish(self.preset_state_topic, value)
+        self.mqtt.mqtt_publish(self.preset_state_topic, value, retain=True)
 
     @property
     def temperature(self) -> float:
@@ -182,8 +192,13 @@ class MQTTClimate(MQTTEntityBase):
     def temperature(self, value: Optional[float]) -> None:
         if value is None:
             return
+
+        state = self.api.get_state(self.full_entity_id, "temperature")
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, attributes={"temperature": value})
-        self.mqtt.mqtt_publish(self.temperature_state_topic, value)
+        self.mqtt.mqtt_publish(self.temperature_state_topic, value, retain=True)
 
     @property
     def current_temperature(self) -> float:
@@ -193,8 +208,12 @@ class MQTTClimate(MQTTEntityBase):
     def current_temperature(self, value: Optional[float]) -> None:
         if value is None:
             return
+
+        if self._current_temperature == value:
+            return
+
         self._current_temperature = value
-        self.mqtt.mqtt_publish(self.current_temperature_topic, value)
+        self.mqtt.mqtt_publish(self.current_temperature_topic, value, retain=True)
 
     @property
     def _entity_type(self) -> str:
@@ -209,6 +228,7 @@ class MQTTClimate(MQTTEntityBase):
             "precision": 0.1,
             "temp_step": 0.5,
             "unique_id": self.entity_id,
+            "object_id": self.entity_id,
             "modes": ["heat"] if self.heat_only else ["off", "heat"],
             "name": self.entity_name,
             "device": {
@@ -241,19 +261,20 @@ class MQTTClimate(MQTTEntityBase):
         self._mqtt_subscribe(self._handle_temperature, self.temperature_command_topic)
 
         # Publish initial state
-        self.mqtt.mqtt_publish(self.mode_state_topic, self.mode)
+        self.mqtt.mqtt_publish(self.mode_state_topic, self.mode, retain=True)
 
         if self.has_presets:
-            self.mqtt.mqtt_publish(self.preset_state_topic, self.preset)
+            self.mqtt.mqtt_publish(self.preset_state_topic, self.preset, retain=True)
 
-        self.mqtt.mqtt_publish(self.temperature_state_topic, self.temperature)
         self.mqtt.mqtt_publish(
-            self.current_temperature_topic, self._current_temperature
+            self.temperature_state_topic, self.temperature, retain=True
+        )
+        self.mqtt.mqtt_publish(
+            self.current_temperature_topic, self._current_temperature, retain=True
         )
 
     # Handlers
     def _handle_mode(self, event_name, data, cb_args):
-        self.api.log("Climate %s mode changed: %s", self.entity_id, data)
         self.mode = self._get_string_payload(data)
         self.on_mode_changed()
 
@@ -308,8 +329,13 @@ class MQTTNumber(MQTTEntityBase):
     def state(self, value: Optional[float]) -> None:
         if value is None:
             return
+
+        state = self.api.get_state(self.full_entity_id)
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, state=value)
-        self.mqtt.mqtt_publish(self.state_topic, value)
+        self.mqtt.mqtt_publish(self.state_topic, value, retain=True)
 
     @property
     def _entity_type(self) -> str:
@@ -325,6 +351,7 @@ class MQTTNumber(MQTTEntityBase):
             "step": self.step,
             "mode": self.mode,
             "unique_id": self.entity_id,
+            "object_id": self.entity_id,
             "name": self.entity_name,
             "device": {
                 "identifiers": [device.device_id],
@@ -341,7 +368,7 @@ class MQTTNumber(MQTTEntityBase):
             json.dumps(config),
         )
         self._mqtt_subscribe(self._handle_state, self.command_topic)
-        self.mqtt.mqtt_publish(self.state_topic, self.state)
+        self.mqtt.mqtt_publish(self.state_topic, self.state, retain=True)
 
     # Handlers
     def _handle_state(self, event_name, data, cb_args):
@@ -383,8 +410,13 @@ class MQTTSwitch(MQTTEntityBase):
     def state(self, value: Optional[bool]) -> None:
         if value is None:
             return
-        self.namespace.set_state(self.full_entity_id, state="on" if value else "off")
-        self.mqtt.mqtt_publish(self.state_topic, "on" if value else "off")
+
+        state = get_state_bool(self.api, self.full_entity_id)
+        if state == value:
+            return
+
+        self.namespace.set_state(self.full_entity_id, state="ON" if value else "OFF")
+        self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF", retain=True)
 
     @property
     def _entity_type(self) -> str:
@@ -396,6 +428,7 @@ class MQTTSwitch(MQTTEntityBase):
             "command_topic": self.command_topic,
             "state_topic": self.state_topic,
             "unique_id": self.entity_id,
+            "object_id": self.entity_id,
             "name": self.entity_name,
             "device": {
                 "identifiers": [device.device_id],
@@ -412,7 +445,9 @@ class MQTTSwitch(MQTTEntityBase):
             json.dumps(config),
         )
         self._mqtt_subscribe(self._handle_state, self.command_topic)
-        self.mqtt.mqtt_publish(self.state_topic, self.state)
+        self.mqtt.mqtt_publish(
+            self.state_topic, "ON" if self.state else "OFF", retain=True
+        )
 
     # Handlers
     def _handle_state(self, event_name, data, cb_args):
@@ -452,8 +487,13 @@ class MQTTSensor(MQTTEntityBase):
     def state(self, value: Optional[float]) -> None:
         if value is None:
             return
+
+        state = get_state_float(self.api, self.full_entity_id)
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, state=value)
-        self.mqtt.mqtt_publish(self.state_topic, value)
+        self.mqtt.mqtt_publish(self.state_topic, value, retain=True)
 
     @property
     def _entity_type(self) -> str:
@@ -464,6 +504,7 @@ class MQTTSensor(MQTTEntityBase):
             "platform": "sensor",
             "state_topic": self.state_topic,
             "unique_id": self.entity_id,
+            "object_id": self.entity_id,
             "name": self.entity_name,
             "state_class": self.state_class,
             "device": {
@@ -480,7 +521,7 @@ class MQTTSensor(MQTTEntityBase):
             self.config_topic,
             json.dumps(config),
         )
-        self.mqtt.mqtt_publish(self.state_topic, self.state)
+        self.mqtt.mqtt_publish(self.state_topic, self.state, retain=True)
 
 
 class MQTTBinarySensor(MQTTEntityBase):
@@ -513,8 +554,13 @@ class MQTTBinarySensor(MQTTEntityBase):
     def state(self, value: Optional[bool]) -> None:
         if value is None:
             return
+
+        state = get_state_bool(self.api, self.full_entity_id)
+        if state == value:
+            return
+
         self.namespace.set_state(self.full_entity_id, state="ON" if value else "OFF")
-        self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF")
+        self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF", retain=True)
 
     @property
     def _entity_type(self) -> str:
@@ -525,6 +571,7 @@ class MQTTBinarySensor(MQTTEntityBase):
             "platform": "binary_sensor",
             "state_topic": self.state_topic,
             "unique_id": self.entity_id,
+            "object_id": self.entity_id,
             "name": self.entity_name,
             "device": {
                 "identifiers": [device.device_id],
@@ -540,4 +587,59 @@ class MQTTBinarySensor(MQTTEntityBase):
             self.config_topic,
             json.dumps(config),
         )
-        self.mqtt.mqtt_publish(self.state_topic, "ON" if self.state else "OFF")
+        self.mqtt.mqtt_publish(
+            self.state_topic, "ON" if self.state else "OFF", retain=True
+        )
+
+
+class MQTTButton(MQTTEntityBase):
+    def __init__(
+        self,
+        api: adapi.ADAPI,
+        mqtt: mqttapi.Mqtt,
+        namespace: UserNamespace,
+        prefix: Optional[str],
+        entity_code: str,
+        entity_name: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(api, mqtt, namespace, prefix, entity_code, entity_name, kwargs)
+
+        # Events
+        self.on_press = EventHook()
+
+        # Topics
+        self.command_topic = (
+            f"homeassistant/{self._entity_type}/{self.entity_id}/command"
+        )
+
+    @property
+    def _entity_type(self) -> str:
+        return "button"
+
+    def configure(self, device: MQTTDevice) -> None:
+        config = {
+            "platform": "button",
+            "command_topic": self.command_topic,
+            "unique_id": self.entity_id,
+            "object_id": self.entity_id,
+            "name": self.entity_name,
+            "device": {
+                "identifiers": [device.device_id],
+                "name": device.device_name,
+                "manufacturer": "Cats Ltd.",
+                "model": device.device_model,
+            },
+            **self.kwargs,
+        }
+
+        self.api.log(f"Configuring {self._entity_type} entity %s", self.entity_id)
+        self.mqtt.mqtt_publish(
+            self.config_topic,
+            json.dumps(config),
+        )
+        self._mqtt_subscribe(self._handle_press, self.command_topic)
+
+    # Handlers
+    def _handle_press(self, event_name, data, cb_args):
+        self.on_press()
