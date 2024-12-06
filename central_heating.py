@@ -98,8 +98,8 @@ class CentralHeating(hass.Hass):
             self.stop_pump(self.global_config.pump_radiators)
 
     def update_state(self) -> (float, bool):
-        room_temp = 100
-        room_setpoint = 100
+        room_temp: Optional[float] = None
+        room_setpoint: Optional[float] = None
         pid_output = 0
         any_climate_on = False
         any_trv_open = False
@@ -107,18 +107,30 @@ class CentralHeating(hass.Hass):
         for room in self.rooms:
             room.control_room_temperature()
 
-            room_temp = min(room_temp, room.room_climate.room_temp)
-            room_setpoint = min(room_setpoint, room.room_climate.climate.temperature)
+            if room.room_climate.room_temp is not None:
+                room_temp = (
+                    min(room_temp, room.room_climate.room_temp)
+                    if room_temp is not None
+                    else room.room_climate.room_temp
+                )
+            if room.room_climate.climate.temperature is not None:
+                room_setpoint = (
+                    min(room_setpoint, room.room_climate.climate.temperature)
+                    if room_setpoint is not None
+                    else room.room_climate.climate.temperature
+                )
             pid_output = max(pid_output, room.room_climate.hinged_output)
-            any_climate_on = any_climate_on or room.room_climate.climate.mode
+            any_climate_on = any_climate_on or room.room_climate.climate.mode == "heat"
             any_trv_open = any_trv_open or (
                 room.trv.trv_open if room.trv is not None else True
             )
 
-        self.master_room_climate.mode = "heat" if any_climate_on else "off"
-        self.master_room_climate.temperature = room_setpoint
-        self.master_room_climate.current_temperature = room_temp
+        if room_temp is not None:
+            self.master_room_climate.current_temperature = room_temp
+        if room_setpoint is not None:
+            self.master_room_climate.temperature = room_setpoint
         self.master_pid_output.state = pid_output
+        self.master_room_climate.mode = "heat" if any_climate_on else "off"
 
         return pid_output, any_trv_open
 
