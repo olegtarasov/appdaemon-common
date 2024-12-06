@@ -47,7 +47,7 @@ class CentralHeating(hass.Hass):
             room = Room(self, mqtt, self.control_heating, item, self.global_config)
             self.rooms.append(room)
 
-        self.log("Room config:\n%s", self.rooms)
+        self.log("Rooms:\n%s", ", ".join([room.name for room in self.rooms]))
 
         # Master thermostat MQTT device
         namespace = UserNamespace(self, CENRAL_HEATING_NS)
@@ -79,23 +79,32 @@ class CentralHeating(hass.Hass):
 
         self.configure()
 
+        boiler_state = self.get_state(self.global_config.boiler_online_sensor)
+        self.log("Boiler state: %s | %s", boiler_state, type(boiler_state))
+
         # noinspection PyTypeChecker
-        self.run_every(self.on_control_timer, "now+1", 1)
+        self.run_every(self._handle_timer, "now+1", 1)
 
         self.log("Initialized")
 
     def terminate(self):
         pass
 
+    def configure(self):
+        for room in self.rooms:
+            room.configure()
+
+        self.master_device.configure()
+
     def control_heating(self):
         pid_output, any_trv_open = self.update_state()
         if pid_output > 0:
-            self.start_pump(self.global_config.pump_floor)
+            self._start_pump(self.global_config.pump_floor)
             if any_trv_open:
-                self.start_pump(self.global_config.pump_radiators)
+                self._start_pump(self.global_config.pump_radiators)
         else:
-            self.stop_pump(self.global_config.pump_floor)
-            self.stop_pump(self.global_config.pump_radiators)
+            self._stop_pump(self.global_config.pump_floor)
+            self._stop_pump(self.global_config.pump_radiators)
 
     def update_state(self) -> (float, bool):
         room_temp: Optional[float] = None
@@ -134,12 +143,22 @@ class CentralHeating(hass.Hass):
 
         return pid_output, any_trv_open
 
-    def configure(self):
-        for room in self.rooms:
-            room.configure()
+    # Pump operations
+    def _start_pump(self, pump: Optional[str]):
+        if pump is None:
+            return
+        cur_state = self.get_state(pump)
+        if cur_state != "on":
+            self.call_service("switch/turn_on", entity_id=pump)
 
-        self.master_device.configure()
+    def _stop_pump(self, pump: Optional[str]):
+        if pump is None:
+            return
+        cur_state = self.get_state(pump)
+        if cur_state != "off":
+            self.call_service("switch/turn_off", entity_id=pump)
 
+    # Handlers
     def _handle_ha_mqtt_start(self, event_name, data, cb_args):
         if not "payload" in data:
             self.error("No payload in MQTT data dict: %s", data)
@@ -151,24 +170,8 @@ class CentralHeating(hass.Hass):
             )
             self.configure()
 
-    # ========= Callbacks
-    def on_control_timer(self, cb_args):
+    def _handle_timer(self, cb_args):
         self.control_heating()
-
-    # ========= Processing
-    def start_pump(self, pump: Optional[str]):
-        if pump is None:
-            return
-        cur_state = self.get_state(pump)
-        if cur_state != "on":
-            self.call_service("switch/turn_on", entity_id=pump)
-
-    def stop_pump(self, pump: Optional[str]):
-        if pump is None:
-            return
-        cur_state = self.get_state(pump)
-        if cur_state != "off":
-            self.call_service("switch/turn_off", entity_id=pump)
 
 
 class GlobalConfig:
@@ -179,6 +182,9 @@ class GlobalConfig:
         )
         self.pump_floor: Optional[str] = (
             config["pump_floor"] if "pump_floor" in config else None
+        )
+        self.boiler_online_sensor = (
+            config["boiler_online_sensor"] if "boiler_online_sensor" in config else None
         )
 
 
@@ -325,9 +331,6 @@ class TRV(EntityBase):
 
         super().__init__(api, mqtt, config)
 
-        # Events
-        self.on_trv_changed = EventHook()
-
         # MQTT
         self._trv_sensor = self.register_mqtt_entity(
             MQTTBinarySensor(
@@ -386,7 +389,6 @@ class TRV(EntityBase):
     # Handlers
     def _handle_trv(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
-        self.on_trv_changed()
 
 
 class FloorClimate(EntityBase):
@@ -395,9 +397,6 @@ class FloorClimate(EntityBase):
             raise Exception("Floor temperature sensor not configured")
 
         super().__init__(api, mqtt, config)
-
-        # Events
-        self.on_floor_temp_changed = EventHook()
 
         # MQTT
         self.climate = self.register_mqtt_entity(
@@ -433,7 +432,6 @@ class FloorClimate(EntityBase):
 
     def _handle_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
-        self.on_floor_temp_changed()
 
 
 class PIDClimate(EntityBase):
@@ -443,9 +441,6 @@ class PIDClimate(EntityBase):
         super().__init__(api, mqtt, config)
 
         self.use_hinge = use_hinge
-
-        # Events
-        self.on_room_temp_changed = EventHook()
 
         # MQTT
         self.climate = self.register_mqtt_entity(
@@ -747,6 +742,10 @@ class Room:
             entities_mqtt,
         )
 
+    @property
+    def name(self) -> str:
+        return self._config.room_name
+
     def control_room_temperature(self):
         self.room_climate.claculate_output()
         if self.trv is not None:
@@ -824,6 +823,3 @@ class Room:
 
     def _handle_room_pid_ki(self):
         self._save_preset()
-
-    def __repr__(self):
-        return f"{self._config.room_name}:\n"
