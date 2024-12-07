@@ -6,8 +6,8 @@ from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
 import appdaemon.plugins.hass.hassapi as hass
 
-from framework.event_hook import EventHook
-from framework.mqtt_entites import (
+from common.framework.event_hook import EventHook
+from common.framework.mqtt_entites import (
     MQTTBinarySensor,
     MQTTButton,
     MQTTClimate,
@@ -16,14 +16,11 @@ from framework.mqtt_entites import (
     MQTTNumber,
     MQTTSensor,
 )
-from framework.user_namespace import UserNamespace
-from framework.utils import get_state_bool, get_state_float
-from framework.simple_pid import PID
+from common.framework.user_namespace import UserNamespace
+from common.framework.utils import get_state_bool, get_state_float
+from common.framework.simple_pid import PID
 
-# TODO: Start pumps and open all TRVs on app shutdown or error
-# TODO: Also do this when thermsostat gets disconnected
 # TODO: When critical sensors are not available, open TRV and pause PID
-# TODO: Add HA automation and sensor that disables HA PIDs when AppDaemon crashes (some kind of a deadman switch)
 # TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
 # TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
 #  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
