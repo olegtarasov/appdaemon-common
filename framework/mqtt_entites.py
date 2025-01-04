@@ -415,7 +415,6 @@ class MQTTSwitch(MQTTEntityBase):
         if state == value:
             return
 
-        self.api.log("Changing state of switch %s: %s", self.full_entity_id, value)
         self.namespace.set_state(self.full_entity_id, state="ON" if value else "OFF")
         self.mqtt.mqtt_publish(self.state_topic, "ON" if value else "OFF", retain=True)
 
@@ -452,7 +451,6 @@ class MQTTSwitch(MQTTEntityBase):
 
     # Handlers
     def _handle_state(self, event_name, data, cb_args):
-        self.api.log("Received data from switch %s: %s", self.full_entity_id, data)
         self.state = self._get_bool_payload(data)
         self.on_state_changed()
 

@@ -186,10 +186,10 @@ class CentralHeating(hass.Hass):
             self.log("Exception occured while trying to control heating")
             self.log(traceback.format_exc())
             if self._control_fault_awaiter is None:
-                self.log("This is a consecutive fault")
+                self.log("This is a new fault")
                 self._control_fault_interval = START_CONTROL_FAULT_INTERVAL
             else:
-                self.log("This is a new fault")
+                self.log("This is a consecutive fault")
                 self._control_fault_interval = min(
                     self._control_fault_interval * 2, MAX_CONTROL_FAULT_INTERVAL
                 )
