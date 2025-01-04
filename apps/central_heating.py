@@ -88,7 +88,7 @@ class CentralHeating(hass.Hass):
             "master_thermostat",
             "Master Thermostat",
             "Virtual Room Thermostat",
-            [self._master_room_climate, self._master_pid_output],
+            [self._master_room_climate, self._master_pid_output, self._generate_faults],
         )
 
         # Subscribe to HA MQTT status message and run room and master configuration
