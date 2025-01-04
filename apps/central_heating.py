@@ -43,7 +43,7 @@ class CentralHeating(hass.Hass):
             raise Exception("MQTT not connected")
 
         # Storage
-        self._namespace = UserNamespace(self, CENTRAL_HEATING_NS)
+        self._user_ns = UserNamespace(self, CENTRAL_HEATING_NS)
 
         # State
         self._boiler_fault = False
@@ -52,7 +52,7 @@ class CentralHeating(hass.Hass):
         self._control_fault_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_interval = 0 # seconds
 
-        last_terminate = self._namespace.get_state(LAST_TERMINATE_KEY, default=None)
+        last_terminate = self._user_ns.get_state(LAST_TERMINATE_KEY, default=None)
         self.log("Got last terminate time: %s, %s", last_terminate, type(last_terminate))
 
 
@@ -69,12 +69,12 @@ class CentralHeating(hass.Hass):
 
         # Master thermostat MQTT device
         self._master_room_climate = MQTTClimate(
-            self, mqtt, self._namespace, "master", "room_climate", "Room", False
+            self, mqtt, self._user_ns, "master", "room_climate", "Room", False
         )
         self._master_pid_output = MQTTSensor(
             self,
             mqtt,
-            self._namespace,
+            self._user_ns,
             "master",
             "pid_output",
             "PID Output",
@@ -104,7 +104,7 @@ class CentralHeating(hass.Hass):
     def terminate(self):
         self.log("Received termination signal")
         self._open_trvs_start_pumps()
-        self._namespace.set_state(LAST_TERMINATE_KEY, state=self.datetime())
+        self._user_ns.set_state(LAST_TERMINATE_KEY, state=self.datetime())
 
     def configure(self):
         for room in self._rooms:
