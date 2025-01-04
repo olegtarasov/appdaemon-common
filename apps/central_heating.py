@@ -22,13 +22,8 @@ from common.framework.utils import get_state_bool, get_state_float
 from common.framework.simple_pid import PID
 
 
-# BUG!!!: All PID integrals start oscillating for some reason
 # TODO: When critical sensors are not available, open TRV and pause PID
 # TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
-# TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
-#  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
-
-LAST_TERMINATE_KEY = "datetime.last_terminate"
 
 CENTRAL_HEATING_NS = "central_heating"
 MAX_CONTROL_FAULT_INTERVAL = 160
@@ -45,15 +40,13 @@ class CentralHeating(hass.Hass):
         # Storage
         self._user_ns = UserNamespace(self, CENTRAL_HEATING_NS)
 
-        self._user_ns.set_state(LAST_TERMINATE_KEY, state=None)
-
         # State
         self._boiler_fault = False
         # If boiler comes offline, we wait for 10s for it to come back, because it can be a simple wi-fi malfunction
         self._boiler_online_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_interval = 0 # seconds
-        
+
         # Config
         self._global_config = GlobalConfig(self.args)
 
