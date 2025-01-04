@@ -28,7 +28,7 @@ from common.framework.simple_pid import PID
 # TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
 #  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
 
-LAST_TERMINATE_KEY = "last_terminate"
+LAST_TERMINATE_KEY = "datetime.last_terminate"
 
 CENTRAL_HEATING_NS = "central_heating"
 MAX_CONTROL_FAULT_INTERVAL = 160
@@ -102,8 +102,10 @@ class CentralHeating(hass.Hass):
         self.log("Initialized")
 
     def terminate(self):
+        # MQTT and HA connections are broken before terminate() is called, so we can't open TRVs and start the pumps.
+        # We have to do this with a separate automation when master_pid_output sensor becomes unavailable due to
+        # expire_after being set.
         self.log("Received termination signal")
-        self._open_trvs_start_pumps()
         self._user_ns.set_state(LAST_TERMINATE_KEY, state=self.datetime())
 
     def configure(self):
