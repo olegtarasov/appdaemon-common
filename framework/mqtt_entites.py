@@ -90,7 +90,7 @@ class MQTTEntityBase:
         if isinstance(payload, bool):
             return payload
         try:
-            return str_to_bool(payload)
+            return str_to_bool(payload.lower())
         except:
             self.api.error("Failed to convert MQTT payload to bool: %s", payload)
             return default_value
