@@ -45,17 +45,15 @@ class CentralHeating(hass.Hass):
         # Storage
         self._user_ns = UserNamespace(self, CENTRAL_HEATING_NS)
 
+        self._user_ns.set_state(LAST_TERMINATE_KEY, state=None)
+
         # State
         self._boiler_fault = False
         # If boiler comes offline, we wait for 10s for it to come back, because it can be a simple wi-fi malfunction
         self._boiler_online_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_interval = 0 # seconds
-
-        last_terminate = self._user_ns.get_state(LAST_TERMINATE_KEY, default=None)
-        self.log("Got last terminate time: %s, %s", last_terminate, type(last_terminate))
-
-
+        
         # Config
         self._global_config = GlobalConfig(self.args)
 
@@ -96,6 +94,7 @@ class CentralHeating(hass.Hass):
         )
 
         self.configure()
+
         # noinspection PyTypeChecker
         self._timer_handle = self.run_every(self._handle_timer, f"now+1", 1)
 
@@ -106,7 +105,6 @@ class CentralHeating(hass.Hass):
         # We have to do this with a separate automation when master_pid_output sensor becomes unavailable due to
         # expire_after being set.
         self.log("Received termination signal")
-        self._user_ns.set_state(LAST_TERMINATE_KEY, state=self.datetime())
 
     def configure(self):
         for room in self._rooms:
