@@ -15,6 +15,7 @@ from common.framework.mqtt_entites import (
     MQTTEntityBase,
     MQTTNumber,
     MQTTSensor,
+    MQTTSwitch,
 )
 from common.framework.simple_awaiter import SimpleAwaiter
 from common.framework.user_namespace import UserNamespace
@@ -27,8 +28,9 @@ from common.framework.simple_pid import PID
 
 CENTRAL_HEATING_NS = "central_heating"
 MAX_CONTROL_FAULT_INTERVAL = 160
-START_CONTROL_FAULT_INTERVAL = 10 # (20, 40, 80, 160)
+START_CONTROL_FAULT_INTERVAL = 10  # (20, 40, 80, 160)
 PID_OUTPUT_AVERAGE_SAMPLES = 5
+
 
 # noinspection PyAttributeOutsideInit
 class CentralHeating(hass.Hass):
@@ -45,7 +47,7 @@ class CentralHeating(hass.Hass):
         # If boiler comes offline, we wait for 10s for it to come back, because it can be a simple wi-fi malfunction
         self._boiler_online_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_awaiter: Optional[SimpleAwaiter] = None
-        self._control_fault_interval = 0 # seconds
+        self._control_fault_interval = 0  # seconds
 
         # Config
         self._global_config = GlobalConfig(self.args)
@@ -72,6 +74,15 @@ class CentralHeating(hass.Hass):
             icon="mdi:gauge",
             entity_category="diagnostic",
             expire_after=60,
+        )
+        self._generate_faults = MQTTSwitch(
+            self,
+            mqtt,
+            self._user_ns,
+            "master",
+            "generate_faults",
+            "Generate Faults",
+            entity_category="diagnostic",
         )
         self._master_device = MQTTDevice(
             "master_thermostat",
@@ -118,8 +129,12 @@ class CentralHeating(hass.Hass):
                     return
                 if self._boiler_online_awaiter is None:
                     # This is a new development. Try to wait for 10 seconds for boiler to come online
-                    self.log("Boiler became offline, waiting for 10 seconds to resolve itself")
-                    self._boiler_online_awaiter = SimpleAwaiter(self, timedelta(seconds=10))
+                    self.log(
+                        "Boiler became offline, waiting for 10 seconds to resolve itself"
+                    )
+                    self._boiler_online_awaiter = SimpleAwaiter(
+                        self, timedelta(seconds=10)
+                    )
                 else:
                     if self._boiler_online_awaiter.elapsed:
                         # Boiler didn't come back in 10 seconds, let's disable pids, start pumps and open TRVs
@@ -149,6 +164,10 @@ class CentralHeating(hass.Hass):
                 self.log("Control fault interval elapsed, trying to restore control")
                 self._set_room_faults(False)
 
+            if self._generate_faults.state:
+                self.log("Generate Faults switch is on, raising an exception")
+                raise Exception("Debug exception")
+
             pid_output, any_trv_open = self.update_state()
             if pid_output > 0:
                 self._start_pump(self._global_config.pump_floor)
@@ -171,9 +190,13 @@ class CentralHeating(hass.Hass):
                 self._control_fault_interval = START_CONTROL_FAULT_INTERVAL
             else:
                 self.log("This is a new fault")
-                self._control_fault_interval = min(self._control_fault_interval * 2, MAX_CONTROL_FAULT_INTERVAL)
+                self._control_fault_interval = min(
+                    self._control_fault_interval * 2, MAX_CONTROL_FAULT_INTERVAL
+                )
             self.log("Wait time is set to %d seconds", self._control_fault_interval)
-            self._control_fault_awaiter = SimpleAwaiter(self, timedelta(seconds=self._control_fault_interval))
+            self._control_fault_awaiter = SimpleAwaiter(
+                self, timedelta(seconds=self._control_fault_interval)
+            )
             self._set_room_faults(True)
             self._open_trvs_start_pumps()
 
@@ -523,9 +546,7 @@ class FloorClimate(EntityBase):
 
 
 class PIDClimate(EntityBase):
-    def __init__(
-        self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig
-    ):
+    def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
         super().__init__(api, mqtt, config)
 
         # MQTT
@@ -651,7 +672,9 @@ class PIDClimate(EntityBase):
         self.reset_pid_integral_button.on_press += self._handle_reset_pid
 
         # Private
-        self._fault = False # Set from the outside when PID should be disabled due to a fault
+        self._fault = (
+            False  # Set from the outside when PID should be disabled due to a fault
+        )
         self._pid = PID(
             self.pid_kp.state,
             self.pid_ki.state,
@@ -661,7 +684,10 @@ class PIDClimate(EntityBase):
             (-1, 1),
         )
         self._output: list[float] = []
-        self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled, self._no_fault]
+        self._pid_enablers: list[Callable[[], bool]] = [
+            self._room_climate_enabled,
+            self._no_fault,
+        ]
 
         # Subscribe to sensors
         self._api.listen_state(self._handle_room_temp, self._config.room_temp_sensor)
@@ -687,7 +713,9 @@ class PIDClimate(EntityBase):
 
     @fault.setter
     def fault(self, value: bool) -> None:
-        self._api.log("Changing fault state for room %s to %s", self._config.room_name, value)
+        self._api.log(
+            "Changing fault state for room %s to %s", self._config.room_name, value
+        )
         self._fault = value
         self.fault_sensor.state = self._fault
 
@@ -792,7 +820,9 @@ class PIDClimate(EntityBase):
 
 
 class Room:
-    def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, room_config: dict[str, Any]):
+    def __init__(
+        self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, room_config: dict[str, Any]
+    ):
         self._api = api
         self._mqtt = mqtt
         self._config = RoomConfig(room_config)
@@ -801,9 +831,7 @@ class Room:
         self._entities: list[EntityBase] = []
 
         # Create room entities based on config
-        self.room_climate = self._add_entity(
-            PIDClimate(api, mqtt, self._config)
-        )
+        self.room_climate = self._add_entity(PIDClimate(api, mqtt, self._config))
         self.floor_climate = self._add_entity(
             FloorClimate(api, mqtt, self._config)
             if self._config.floor_temp_sensor is not None
