@@ -131,7 +131,7 @@ class CentralHeating(hass.Hass):
                 if self._boiler_online_awaiter is None:
                     # This is a new development. Try to wait for BOILER_AWAITER_ITNTERVAL seconds for boiler to come online
                     self.log(
-                        "Boiler became offline, waiting for BOILER_AWAITER_ITNTERVAL seconds to resolve itself"
+                        "Boiler became offline, waiting for %s seconds to resolve itself", BOILER_AWAITER_ITNTERVAL
                     )
                     self._boiler_online_awaiter = SimpleAwaiter(
                         self, timedelta(seconds=BOILER_AWAITER_ITNTERVAL)
@@ -140,7 +140,10 @@ class CentralHeating(hass.Hass):
                     if self._boiler_online_awaiter.elapsed:
                         # Boiler didn't come back in BOILER_AWAITER_ITNTERVAL seconds, let's disable pids, start pumps and open TRVs
                         self._boiler_online_awaiter = None
-                        self.log("Boiler didn't come back in %s seconds", BOILER_AWAITER_ITNTERVAL)
+                        self.log(
+                            "Boiler didn't come back in %s seconds",
+                            BOILER_AWAITER_ITNTERVAL,
+                        )
                         self._open_trvs_start_pumps()
                         self._set_room_faults(True)
                         self._boiler_fault = True
@@ -151,7 +154,10 @@ class CentralHeating(hass.Hass):
                     self._boiler_fault = False
                     self._boiler_online_awaiter = None
                 if self._boiler_online_awaiter is not None:
-                    self.log("Boiler has come back in less than %s seconds", BOILER_AWAITER_ITNTERVAL)
+                    self.log(
+                        "Boiler has come back in less than %s seconds",
+                        BOILER_AWAITER_ITNTERVAL,
+                    )
                     self._boiler_online_awaiter = None
 
         try:
