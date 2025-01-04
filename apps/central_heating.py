@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
-from email.policy import default
 from typing import Any, Callable, Optional, TypeVar, cast
+import traceback
 
 from appdaemon import adapi
 from appdaemon.plugins.mqtt import mqttapi
@@ -16,18 +16,20 @@ from common.framework.mqtt_entites import (
     MQTTNumber,
     MQTTSensor,
 )
+from common.framework.simple_awaiter import SimpleAwaiter
 from common.framework.user_namespace import UserNamespace
 from common.framework.utils import get_state_bool, get_state_float
 from common.framework.simple_pid import PID
 
+# BUG!!!: All PID integrals start oscillating for some reason
 # TODO: When critical sensors are not available, open TRV and pause PID
 # TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
 # TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
 #  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
 
-PID_HINGE = 0.03
 CENRAL_HEATING_NS = "central_heating"
-
+MAX_CONTROL_FAULT_INTERVAL = 160
+START_CONTROL_FAULT_INTERVAL = 10 # (20, 40, 80, 160)
 
 # noinspection PyAttributeOutsideInit
 class CentralHeating(hass.Hass):
@@ -37,9 +39,11 @@ class CentralHeating(hass.Hass):
             raise Exception("MQTT not connected")
 
         # State
-        self._timer_interval: int = 1
-        self._timer_handle: Optional[str] = None
-        self._fault: bool = False
+        self._boiler_fault = False
+        # If boiler comes offline, we wait for 10s for it to come back, because it can be a simple wi-fi malfunction
+        self._boiler_online_awaiter: Optional[SimpleAwaiter] = None
+        self._control_fault_awaiter: Optional[SimpleAwaiter] = None
+        self._control_fault_interval = 0 # seconds
 
         # Config
         self._global_config = GlobalConfig(self.args)
@@ -47,7 +51,7 @@ class CentralHeating(hass.Hass):
         # Init rooms
         self._rooms: list[Room] = []
         for item in self.args["rooms"]:
-            room = Room(self, mqtt, self.control_heating, item, self._global_config)
+            room = Room(self, mqtt, item)
             self._rooms.append(room)
 
         self.log("Rooms:\n%s", ", ".join([room.name for room in self._rooms]))
@@ -82,12 +86,14 @@ class CentralHeating(hass.Hass):
         )
 
         self.configure()
-        self._arm_timer()
+        # noinspection PyTypeChecker
+        self._timer_handle = self.run_every(self._handle_timer, f"now+1", 1)
 
         self.log("Initialized")
 
     def terminate(self):
-        self._handle_fault(True)
+        self.log("Received termination signal")
+        self._open_trvs_start_pumps()
 
     def configure(self):
         for room in self._rooms:
@@ -96,26 +102,49 @@ class CentralHeating(hass.Hass):
         self._master_device.configure()
 
     def control_heating(self):
+        # Check if boiler is connected. If not, we should open all TRVs and start pumps, so that
+        # hardware thermostat can operate autonomously
+        if self._global_config.boiler_online_sensor is not None:
+            boiler_online = get_state_bool(
+                self, self._global_config.boiler_online_sensor, default=False
+            )
+            if not boiler_online:
+                if self._boiler_fault:
+                    # Fault has already been set, nothing to do until boiler comes online
+                    return
+                if self._boiler_online_awaiter is None:
+                    # This is a new development. Try to wait for 10 seconds for boiler to come online
+                    self.log("Boiler became offline, waiting for 10 seconds to resolve itself")
+                    self._boiler_online_awaiter = SimpleAwaiter(self, timedelta(seconds=10))
+                else:
+                    if self._boiler_online_awaiter.elapsed:
+                        # Boiler didn't come back in 10 seconds, let's disable pids, start pumps and open TRVs
+                        self._boiler_online_awaiter = None
+                        self.log("Boiler didn't come back in 10 seconds")
+                        self._open_trvs_start_pumps()
+                        self._set_room_faults(True)
+                        self._boiler_fault = True
+            else:
+                if self._boiler_fault:
+                    self.log("Boiler has come back after the fault state")
+                    self._set_room_faults(False)
+                    self._boiler_fault = False
+                    self._boiler_online_awaiter = None
+                if self._boiler_online_awaiter is not None:
+                    self.log("Boiler has come back in less than 10 seconds")
+                    self._boiler_online_awaiter = None
+
         try:
-            # Check if hardware thermostat is connected. If not, we should open all TRVs and start pumps, so that
-            # thermostat can operate autonomously
-            if self._global_config.boiler_online_sensor is not None:
-                boiler_online = get_state_bool(
-                    self, self._global_config.boiler_online_sensor, default=False
-                )
-                if not boiler_online:
-                    # Boiler is offline. If it's a new development, make a log entry
-                    if not self._fault:
-                        self._fault = True
-                        self.log(
-                            "Thermostat became offline, opening all TRVs and starting pumps"
-                        )
-                    self._handle_fault(False)
+            if self._control_fault_awaiter is not None:
+                # There was a control fault, and we are waiting for increasingly long intervals for it to clear out
+                if not self._control_fault_awaiter.elapsed:
+                    return
 
-                    return False  # Don't execute usual control logic
+                # Interval has elapsed, but we don't clear the awaiter just yet. If another exception occurs,
+                # this will be a signal to increase wait duration. We clear room faults so that PIDs could be updated.
+                self.log("Control fault interval elapsed, trying to restore control")
+                self._set_room_faults(False)
 
-            # If boiler comes online, don't reset fault state right away. Maybe there was an exception in control
-            # logic, so we want to try to get to the end without errors first.
             pid_output, any_trv_open = self.update_state()
             if pid_output > 0:
                 self._start_pump(self._global_config.pump_floor)
@@ -125,16 +154,24 @@ class CentralHeating(hass.Hass):
                 self._stop_pump(self._global_config.pump_floor)
                 self._stop_pump(self._global_config.pump_radiators)
 
-            # If we got here without an error, we can reset fault state
-            if self._fault:
-                self._fault = False
-                self.log("Fault has been resolved")
-                self._timer_interval = 1
-                self._arm_timer()
-        except Exception as e:
-            self.log("Exception occured while trying to control heating:\n%s", e)
-            self._fault = True
-            self._handle_fault(False)
+            # If we got here with no exception, clear the fault awaiter
+            if self._control_fault_awaiter is not None:
+                self.log("Successfully recovered from the control fault")
+                self._control_fault_awaiter = None
+
+        except Exception:
+            self.log("Exception occured while trying to control heating")
+            self.log(traceback.format_exc())
+            if self._control_fault_awaiter is None:
+                self.log("This is a consecutive fault")
+                self._control_fault_interval = START_CONTROL_FAULT_INTERVAL
+            else:
+                self.log("This is a new fault")
+                self._control_fault_interval = min(self._control_fault_interval * 2, MAX_CONTROL_FAULT_INTERVAL)
+            self.log("Wait time is set to %d seconds", self._control_fault_interval)
+            self._control_fault_awaiter = SimpleAwaiter(self, timedelta(seconds=self._control_fault_interval))
+            self._set_room_faults(True)
+            self._open_trvs_start_pumps()
 
     def update_state(self) -> (float, bool):
         room_temp: Optional[float] = None
@@ -158,7 +195,7 @@ class CentralHeating(hass.Hass):
                     if room_setpoint is not None
                     else room.room_climate.climate.temperature
                 )
-            pid_output = max(pid_output, room.room_climate.hinged_output)
+            pid_output = max(pid_output, room.room_climate.output)
             any_climate_on = any_climate_on or room.room_climate.climate.mode == "heat"
             any_trv_open = any_trv_open or (
                 room.trv.trv_open if room.trv is not None else True
@@ -173,37 +210,18 @@ class CentralHeating(hass.Hass):
 
         return pid_output, any_trv_open
 
-    def _arm_timer(self):
-        if self._timer_handle is not None:
-            self.cancel_timer(self._timer_handle, True)
-            self._timer_handle = None
+    def _set_room_faults(self, value: bool) -> None:
+        for room in self._rooms:
+            if room.room_climate is not None:
+                room.room_climate.fault = value
 
-        self.log("Arming timer with %s second interval", self._timer_interval)
-        # noinspection PyTypeChecker
-        self._timer_handle = self.run_every(
-            self._handle_timer, f"now+{self._timer_interval}", self._timer_interval
-        )
-
-    def _increase_timer_interval(self) -> bool:
-        if self._timer_interval >= 60:
-            # Don't increase the interval indefinetely, check at least once a minute
-            return False
-
-        self._timer_interval *= 2
-        self.log("Increased timer interval up to %s seconds", self._timer_interval)
-        return True
-
-    # Something happened, turn on pumps and open all TRVs
-    def _handle_fault(self, is_terminating: bool):
+    def _open_trvs_start_pumps(self):
+        self.log("Starting pumps and opening TRVs")
         for room in self._rooms:
             if room.trv is not None:
                 room.trv.operate_trv(1)
         self._start_pump(self._global_config.pump_radiators)
         self._start_pump(self._global_config.pump_floor)
-
-        if not is_terminating:
-            if self._increase_timer_interval():
-                self._arm_timer()
 
     # Pump operations
     def _start_pump(self, pump: Optional[str]):
@@ -221,6 +239,7 @@ class CentralHeating(hass.Hass):
             self.call_service("switch/turn_off", entity_id=pump)
 
     # Handlers
+    # noinspection PyUnusedLocal
     def _handle_ha_mqtt_start(self, event_name, data, cb_args):
         if not "payload" in data:
             self.error("No payload in MQTT data dict: %s", data)
@@ -232,13 +251,13 @@ class CentralHeating(hass.Hass):
             )
             self.configure()
 
+    # noinspection PyUnusedLocal
     def _handle_timer(self, cb_args):
         self.control_heating()
 
 
 class GlobalConfig:
     def __init__(self, config: dict[str, Any]):
-        self.use_hinge = config["use_hinge"] if "use_hinge" in config else True
         self.pump_radiators: Optional[str] = (
             config["pump_radiators"] if "pump_radiators" in config else None
         )
@@ -380,6 +399,7 @@ class Window(EntityBase):
         self._window_open_sensor.state = self.window_open
 
     # Handlers
+    # noinspection PyUnusedLocal
     def _handle_window(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
         self.should_heat()
@@ -449,6 +469,7 @@ class TRV(EntityBase):
                 )
 
     # Handlers
+    # noinspection PyUnusedLocal
     def _handle_trv(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
 
@@ -492,17 +513,16 @@ class FloorClimate(EntityBase):
     def report_state(self) -> None:
         self.climate.current_temperature = self.floor_temp
 
+    # noinspection PyUnusedLocal
     def _handle_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
 
 
 class PIDClimate(EntityBase):
     def __init__(
-        self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig, use_hinge: bool
+        self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig
     ):
         super().__init__(api, mqtt, config)
-
-        self.use_hinge = use_hinge
 
         # MQTT
         self.climate = self.register_mqtt_entity(
@@ -595,6 +615,18 @@ class PIDClimate(EntityBase):
                 entity_category="diagnostic",
             )
         )
+        self.fault_sensor = self.register_mqtt_entity(
+            MQTTBinarySensor(
+                api,
+                mqtt,
+                UserNamespace(api, CENRAL_HEATING_NS),
+                self._config.room_code,
+                "fault",
+                "Fault",
+                icon="mdi:close-octagon-outline",
+                entity_category="diagnostic",
+            )
+        )
         self.reset_pid_integral_button = self.register_mqtt_entity(
             MQTTButton(
                 api,
@@ -615,6 +647,7 @@ class PIDClimate(EntityBase):
         self.reset_pid_integral_button.on_press += self._handle_reset_pid
 
         # Private
+        self._fault = False # Set from the outside when PID should be disabled due to a fault
         self._pid = PID(
             self.pid_kp.state,
             self.pid_ki.state,
@@ -624,8 +657,7 @@ class PIDClimate(EntityBase):
             (-1, 1),
         )
         self._output = 0
-        self._last_returned_output = 0
-        self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled]
+        self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled, self._no_fault]
 
         # Subscribe to sensors
         self._api.listen_state(self._handle_room_temp, self._config.room_temp_sensor)
@@ -635,26 +667,25 @@ class PIDClimate(EntityBase):
         return get_state_float(self._api, self._config.room_temp_sensor)
 
     @property
-    def hinged_output(self) -> float:
+    def output(self) -> float:
         if not self._pid.auto_mode:
             return 0
 
-        if not self.use_hinge:
-            return self._output
-
-        if self._output < -PID_HINGE or self._output > PID_HINGE:
-            self._last_returned_output = self._output
-            return self._last_returned_output
-
-        # PID value inside the hinge, clamp to hinge boundary based on last returned value
-        self._last_returned_output = (
-            -PID_HINGE if self._last_returned_output < 0 else PID_HINGE
-        )
-        return self._last_returned_output
+        return self._output
 
     @property
     def enabled(self) -> bool:
         return self._pid.auto_mode
+
+    @property
+    def fault(self) -> bool:
+        return self._fault
+
+    @fault.setter
+    def fault(self, value: bool) -> None:
+        self._api.log("Changing fault state for room %s to %s", self._config.room_name, value)
+        self._fault = value
+        self.fault_sensor.state = self._fault
 
     def register_pid_enabler(self, enabler: Callable[[], bool]):
         self._pid_enablers.append(enabler)
@@ -682,6 +713,7 @@ class PIDClimate(EntityBase):
         self.pid_integral_sensor.state = self._pid.components[1]
         self.pid_output_sensor.state = self._output
         self.climate.current_temperature = self.room_temp
+        self.fault_sensor.state = self._fault
 
     def apply_preset(self, preset: dict[str, Any]):
         self.climate.mode = preset["mode"] if "mode" in preset else "off"
@@ -714,12 +746,18 @@ class PIDClimate(EntityBase):
     def _room_climate_enabled(self):
         return self.climate.mode == "heat"
 
+    def _no_fault(self):
+        return not self._fault
+
     def _set_pid_enabled(self, value: bool) -> None:
         if self._pid.auto_mode == value:
             return
+
         if value:
+            self._api.log("Disabling PID for room %s", self._config.room_name)
             self._pid.set_auto_mode(True, self._output)
         else:
+            self._api.log("Enabling PID for room %s", self._config.room_name)
             self._pid.set_auto_mode(False)
             self._output = 0
             self._last_returned_output = 0
@@ -742,19 +780,13 @@ class PIDClimate(EntityBase):
     def _handle_reset_pid(self):
         self._pid.reset()
 
+    # noinspection PyUnusedLocal
     def _handle_room_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.climate.current_temperature = self.room_temp
 
 
 class Room:
-    def __init__(
-        self,
-        api: adapi.ADAPI,
-        mqtt: mqttapi.Mqtt,
-        control_heating_callback,
-        room_config: dict[str, Any],
-        global_config: GlobalConfig,
-    ):
+    def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, room_config: dict[str, Any]):
         self._api = api
         self._mqtt = mqtt
         self._config = RoomConfig(room_config)
@@ -764,7 +796,7 @@ class Room:
 
         # Create room entities based on config
         self.room_climate = self._add_entity(
-            PIDClimate(api, mqtt, self._config, global_config.use_hinge)
+            PIDClimate(api, mqtt, self._config)
         )
         self.floor_climate = self._add_entity(
             FloorClimate(api, mqtt, self._config)
@@ -814,7 +846,7 @@ class Room:
             if self.window is not None and not self.window.should_heat():
                 # Don't bother with TRV when window is open — just to save TRV battery
                 return
-            self.trv.operate_trv(self.room_climate.hinged_output)
+            self.trv.operate_trv(self.room_climate._output)
 
     def configure(self):
         self._room_device.configure()
