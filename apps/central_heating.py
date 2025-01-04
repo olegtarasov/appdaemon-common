@@ -21,15 +21,19 @@ from common.framework.user_namespace import UserNamespace
 from common.framework.utils import get_state_bool, get_state_float
 from common.framework.simple_pid import PID
 
+
 # BUG!!!: All PID integrals start oscillating for some reason
 # TODO: When critical sensors are not available, open TRV and pause PID
 # TODO: Set temperatures while opening/closing TRVs. There was a bug when temp was set to 4 deg and TRV didn't open
 # TODO: Hinge doesn't help with oscillation, it just oscillates around hinge value. Maybe need a cooldown period for
 #  opening/closing the TRV, or maybe we should smoothen PID output, like it's possible to do in esphome.
 
-CENRAL_HEATING_NS = "central_heating"
+LAST_TERMINATE_KEY = "last_terminate"
+
+CENTRAL_HEATING_NS = "central_heating"
 MAX_CONTROL_FAULT_INTERVAL = 160
 START_CONTROL_FAULT_INTERVAL = 10 # (20, 40, 80, 160)
+PID_OUTPUT_AVERAGE_SAMPLES = 5
 
 # noinspection PyAttributeOutsideInit
 class CentralHeating(hass.Hass):
@@ -38,12 +42,19 @@ class CentralHeating(hass.Hass):
         if not mqtt.is_client_connected():
             raise Exception("MQTT not connected")
 
+        # Storage
+        self._namespace = UserNamespace(self, CENTRAL_HEATING_NS)
+
         # State
         self._boiler_fault = False
         # If boiler comes offline, we wait for 10s for it to come back, because it can be a simple wi-fi malfunction
         self._boiler_online_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_awaiter: Optional[SimpleAwaiter] = None
         self._control_fault_interval = 0 # seconds
+
+        last_terminate = self._namespace.get_state(LAST_TERMINATE_KEY, default=None)
+        self.log("Got last terminate time: %s, %s", last_terminate, type(last_terminate))
+
 
         # Config
         self._global_config = GlobalConfig(self.args)
@@ -57,14 +68,13 @@ class CentralHeating(hass.Hass):
         self.log("Rooms:\n%s", ", ".join([room.name for room in self._rooms]))
 
         # Master thermostat MQTT device
-        namespace = UserNamespace(self, CENRAL_HEATING_NS)
         self._master_room_climate = MQTTClimate(
-            self, mqtt, namespace, "master", "room_climate", "Room", False
+            self, mqtt, self._namespace, "master", "room_climate", "Room", False
         )
         self._master_pid_output = MQTTSensor(
             self,
             mqtt,
-            namespace,
+            self._namespace,
             "master",
             "pid_output",
             "PID Output",
@@ -94,6 +104,7 @@ class CentralHeating(hass.Hass):
     def terminate(self):
         self.log("Received termination signal")
         self._open_trvs_start_pumps()
+        self._namespace.set_state(LAST_TERMINATE_KEY, state=self.datetime())
 
     def configure(self):
         for room in self._rooms:
@@ -337,7 +348,7 @@ class Window(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 config.room_code,
                 "window_open",
                 "Window",
@@ -418,7 +429,7 @@ class TRV(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 config.room_code,
                 "trv_open",
                 "TRV",
@@ -486,7 +497,7 @@ class FloorClimate(EntityBase):
             MQTTClimate(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 config.room_code,
                 "floor_climate",
                 "Floor",
@@ -529,7 +540,7 @@ class PIDClimate(EntityBase):
             MQTTClimate(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "room_climate",
                 "Room",
@@ -539,7 +550,7 @@ class PIDClimate(EntityBase):
             MQTTNumber(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_kp",
                 "PID kp",
@@ -555,7 +566,7 @@ class PIDClimate(EntityBase):
             MQTTNumber(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_ki",
                 "PID ki",
@@ -571,7 +582,7 @@ class PIDClimate(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_active",
                 "PID active",
@@ -583,7 +594,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_proportional",
                 "PID Proportional",
@@ -595,7 +606,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_integral",
                 "PID Integral",
@@ -607,7 +618,7 @@ class PIDClimate(EntityBase):
             MQTTSensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "pid_output",
                 "PID Output",
@@ -619,7 +630,7 @@ class PIDClimate(EntityBase):
             MQTTBinarySensor(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "fault",
                 "Fault",
@@ -631,7 +642,7 @@ class PIDClimate(EntityBase):
             MQTTButton(
                 api,
                 mqtt,
-                UserNamespace(api, CENRAL_HEATING_NS),
+                UserNamespace(api, CENTRAL_HEATING_NS),
                 self._config.room_code,
                 "reset_pid",
                 "Reset PID",
@@ -656,7 +667,7 @@ class PIDClimate(EntityBase):
             1,
             (-1, 1),
         )
-        self._output = 0
+        self._output: list[float] = []
         self._pid_enablers: list[Callable[[], bool]] = [self._room_climate_enabled, self._no_fault]
 
         # Subscribe to sensors
@@ -668,10 +679,10 @@ class PIDClimate(EntityBase):
 
     @property
     def output(self) -> float:
-        if not self._pid.auto_mode:
+        if not self._pid.auto_mode or len(self._output) == 0:
             return 0
 
-        return self._output
+        return sum(self._output) / len(self._output)
 
     @property
     def enabled(self) -> bool:
@@ -704,14 +715,16 @@ class PIDClimate(EntityBase):
             )
             return
 
-        self._output = self._pid(cur_temp)
+        self._output.append(self._pid(cur_temp))
+        if len(self._output) > PID_OUTPUT_AVERAGE_SAMPLES:
+            self._output.pop(0)
         self.report_state()
 
     def report_state(self):
         self.pid_active_sensor.state = self._pid.auto_mode
         self.pid_proportional_sensor.state = self._pid.components[0]
         self.pid_integral_sensor.state = self._pid.components[1]
-        self.pid_output_sensor.state = self._output
+        self.pid_output_sensor.state = self.output
         self.climate.current_temperature = self.room_temp
         self.fault_sensor.state = self._fault
 
@@ -755,11 +768,11 @@ class PIDClimate(EntityBase):
 
         if value:
             self._api.log("Disabling PID for room %s", self._config.room_name)
-            self._pid.set_auto_mode(True, self._output)
+            self._pid.auto_mode = True
         else:
             self._api.log("Enabling PID for room %s", self._config.room_name)
-            self._pid.set_auto_mode(False)
-            self._output = 0
+            self._pid.auto_mode = False
+            self._output.clear()
             self._last_returned_output = 0
 
         self.report_state()
@@ -790,7 +803,7 @@ class Room:
         self._api = api
         self._mqtt = mqtt
         self._config = RoomConfig(room_config)
-        self._namespace = UserNamespace(api, CENRAL_HEATING_NS)
+        self._namespace = UserNamespace(api, CENTRAL_HEATING_NS)
 
         self._entities: list[EntityBase] = []
 
@@ -846,7 +859,7 @@ class Room:
             if self.window is not None and not self.window.should_heat():
                 # Don't bother with TRV when window is open — just to save TRV battery
                 return
-            self.trv.operate_trv(self.room_climate._output)
+            self.trv.operate_trv(self.room_climate.output)
 
     def configure(self):
         self._room_device.configure()
