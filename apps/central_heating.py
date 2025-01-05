@@ -30,7 +30,7 @@ CENTRAL_HEATING_NS = "central_heating"
 BOILER_AWAITER_ITNTERVAL = 20  # seconds
 MAX_CONTROL_FAULT_INTERVAL = 160
 START_CONTROL_FAULT_INTERVAL = 10  # (20, 40, 80, 160)
-PID_OUTPUT_AVERAGE_SAMPLES = 5
+PID_OUTPUT_AVERAGE_SAMPLES = 20
 
 
 # noinspection PyAttributeOutsideInit
@@ -131,7 +131,8 @@ class CentralHeating(hass.Hass):
                 if self._boiler_online_awaiter is None:
                     # This is a new development. Try to wait for BOILER_AWAITER_ITNTERVAL seconds for boiler to come online
                     self.log(
-                        "Boiler became offline, waiting for %s seconds to resolve itself", BOILER_AWAITER_ITNTERVAL
+                        "Boiler became offline, waiting for %s seconds to resolve itself",
+                        BOILER_AWAITER_ITNTERVAL,
                     )
                     self._boiler_online_awaiter = SimpleAwaiter(
                         self, timedelta(seconds=BOILER_AWAITER_ITNTERVAL)
