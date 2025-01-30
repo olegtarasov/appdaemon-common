@@ -17,9 +17,8 @@ from common.framework.mqtt_entites import (
     MQTTSensor,
     MQTTSwitch,
 )
-from common.framework.simple_awaiter import SimpleAwaiter
 from common.framework.user_namespace import UserNamespace
-from common.framework.utils import get_state_bool, get_state_float
+from common.framework.utils import SimpleAwaiter, get_state_bool, get_state_float
 from common.framework.simple_pid import PID
 
 

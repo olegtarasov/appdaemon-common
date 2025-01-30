@@ -1,11 +1,23 @@
-from datetime import time
-from typing import Any, Optional
+from datetime import datetime, time, timedelta
+from typing import Any, Optional, cast
 
 from appdaemon.adapi import ADAPI
 from appdaemon.utils import sync_wrapper
 
 bool_true = {"y", "yes", "true", "on"}
 bool_false = {"n", "no", "false", "off"}
+
+
+class SimpleAwaiter:
+    def __init__(self, api: ADAPI, wait_time: timedelta) -> None:
+        self.api = api
+
+        start_time = cast(datetime, api.datetime())
+        self.target_time = start_time + wait_time
+
+    @property
+    def elapsed(self) -> bool:
+        return cast(datetime, self.api.datetime()) >= self.target_time
 
 
 @sync_wrapper
