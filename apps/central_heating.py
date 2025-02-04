@@ -175,14 +175,17 @@ class CentralHeating(hass.Hass):
                 self.log("Generate Faults switch is on, raising an exception")
                 raise Exception("Debug exception")
 
-            pid_output, any_trv_open = self.update_state()
-            if pid_output > 0:
-                self._start_pump(self._global_config.pump_floor)
+            room_pid_output, floor_pid_output, any_trv_open = self.update_state()
+            if room_pid_output > 0:
                 if any_trv_open:
                     self._start_pump(self._global_config.pump_radiators)
             else:
-                self._stop_pump(self._global_config.pump_floor)
                 self._stop_pump(self._global_config.pump_radiators)
+
+            if floor_pid_output > 0:
+                self._start_pump(self._global_config.pump_floor)
+            else:
+                self._stop_pump(self._global_config.pump_floor)
 
             # If we got here with no exception, clear the fault awaiter
             if self._control_fault_awaiter is not None:
@@ -207,10 +210,11 @@ class CentralHeating(hass.Hass):
             self._set_room_faults(True)
             self._open_trvs_start_pumps()
 
-    def update_state(self) -> (float, bool):
+    def update_state(self) -> (float, float, bool):
         room_temp: Optional[float] = None
         room_setpoint: Optional[float] = None
-        pid_output = 0
+        room_pid_output = 0
+        floor_pid_output = 0
         any_climate_on = False
         any_trv_open = False
 
@@ -229,7 +233,9 @@ class CentralHeating(hass.Hass):
                     if room_setpoint is not None
                     else room.room_climate.climate.temperature
                 )
-            pid_output = max(pid_output, room.room_climate.output)
+            room_pid_output = max(room_pid_output, room.room_climate.output)
+            if room.floor_climate is not None:
+                floor_pid_output = max(floor_pid_output, room.floor_climate.output)
             any_climate_on = any_climate_on or room.room_climate.climate.mode == "heat"
             any_trv_open = any_trv_open or (
                 room.trv.trv_open if room.trv is not None else True
@@ -239,10 +245,10 @@ class CentralHeating(hass.Hass):
             self._master_room_climate.current_temperature = room_temp
         if room_setpoint is not None:
             self._master_room_climate.temperature = room_setpoint
-        self._master_pid_output.state = pid_output
+        self._master_pid_output.state = max(room_pid_output, floor_pid_output)
         self._master_room_climate.mode = "heat" if any_climate_on else "off"
 
-        return pid_output, any_trv_open
+        return room_pid_output, floor_pid_output, any_trv_open
 
     def _set_room_faults(self, value: bool) -> None:
         for room in self._rooms:
@@ -529,13 +535,35 @@ class FloorClimate(EntityBase):
                 28,
             )
         )
+        self.pid_output_sensor = self.register_mqtt_entity(
+            MQTTSensor(
+                api,
+                mqtt,
+                UserNamespace(api, CENTRAL_HEATING_NS),
+                self._config.room_code,
+                "floor_pid_output",
+                "Floor PID Output",
+                icon="mdi:gauge",
+                entity_category="diagnostic",
+            )
+        )
 
         # Subscribe
         self._api.listen_state(self._handle_floor_temp, self._config.floor_temp_sensor)
 
+        self._output: float = 0.0
+
     @property
     def floor_temp(self) -> Optional[float]:
         return get_state_float(self._api, self._config.floor_temp_sensor)
+
+    @property
+    def enabled(self) -> bool:
+        return self.climate.mode == "heat"
+
+    @property
+    def output(self) -> float:
+        return self._output
 
     def apply_preset(self, preset: dict[str, Any]):
         self.climate.temperature = (
@@ -544,15 +572,34 @@ class FloorClimate(EntityBase):
             else self.climate.default_temperature
         )
 
+    def claculate_output(self):
+        if not self.enabled:
+            return
+
+        cur_temp = self.floor_temp
+        if cur_temp is None:
+            self._api.log(
+                "Failed to get floor temperature for room %s", self._config.room_name
+            )
+            return
+
+        if cur_temp <= self.climate.temperature - 2:
+            self._output = 0.1
+        elif cur_temp >= self.climate.temperature + 2:
+            self._output = 0
+
+        self.report_state()
+
     def report_state(self) -> None:
         self.climate.current_temperature = self.floor_temp
+        self.pid_output_sensor.state = self.output
 
     # noinspection PyUnusedLocal
     def _handle_floor_temp(self, entity, attribute, old: str, new: str, cb_args):
         self.report_state()
 
 
-class PIDClimate(EntityBase):
+class RoomClimate(EntityBase):
     def __init__(self, api: adapi.ADAPI, mqtt: mqttapi.Mqtt, config: RoomConfig):
         super().__init__(api, mqtt, config)
 
@@ -838,7 +885,7 @@ class Room:
         self._entities: list[EntityBase] = []
 
         # Create room entities based on config
-        self.room_climate = self._add_entity(PIDClimate(api, mqtt, self._config))
+        self.room_climate = self._add_entity(RoomClimate(api, mqtt, self._config))
         self.floor_climate = self._add_entity(
             FloorClimate(api, mqtt, self._config)
             if self._config.floor_temp_sensor is not None
@@ -888,6 +935,9 @@ class Room:
                 # Don't bother with TRV when window is open — just to save TRV battery
                 return
             self.trv.operate_trv(self.room_climate.output)
+
+        if self.floor_climate is not None:
+            self.floor_climate.claculate_output()
 
     def configure(self):
         self._room_device.configure()
