@@ -571,6 +571,7 @@ class FloorClimate(EntityBase):
             if "floor_setpoint" in preset
             else self.climate.default_temperature
         )
+        self.climate.mode = preset["floor_mode"] if "floor_mode" in preset else "heat"
 
     def claculate_output(self):
         if not self.enabled:
@@ -910,6 +911,9 @@ class Room:
         self.room_climate.climate.on_temperature_changed += self._handle_room_setpoint
         self.room_climate.pid_kp.on_state_changed += self._handle_room_pid_kp
         self.room_climate.pid_ki.on_state_changed += self._handle_room_pid_ki
+        if self.floor_climate is not None:
+            self.floor_climate.climate.on_temperature_changed += self._handle_floor_setpoint
+            self.floor_climate.climate.on_mode_changed += self._handle_floor_mode
 
         # Collect MQTT entities and perform entity-specific configuration
         entities_mqtt = []
@@ -961,6 +965,7 @@ class Room:
 
         if self.floor_climate is not None:
             attributes["floor_setpoint"] = self.floor_climate.climate.temperature
+            attributes["floor_mode"] = self.floor_climate.climate.mode
 
         self._namespace.set_state(
             f"preset.{self._config.room_code}_{self.room_climate.climate.preset}",
@@ -1007,4 +1012,10 @@ class Room:
         self._save_preset()
 
     def _handle_room_pid_ki(self):
+        self._save_preset()
+
+    def _handle_floor_setpoint(self):
+        self._save_preset()
+
+    def _handle_floor_mode(self):
         self._save_preset()
