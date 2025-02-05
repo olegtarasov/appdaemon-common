@@ -584,7 +584,7 @@ class FloorClimate(EntityBase):
             return
 
         if cur_temp <= self.climate.temperature - 1:
-            self._output = 0.1
+            self._output = 0.05
         elif cur_temp >= self.climate.temperature + 1:
             self._output = 0
 
