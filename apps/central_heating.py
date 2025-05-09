@@ -413,7 +413,7 @@ class Window(EntityBase):
             if (
                 not window_open
                 and self._warmup_time is not None
-                and cast(timedelta, self._api.get_now()) >= self._warmup_time
+                and cast(datetime, self._api.get_now()) >= self._warmup_time
             ):
                 # Window is closed and it stayed closed for warmup time after being open
                 # We enable PID once again setting integral term to equal last output
@@ -429,7 +429,7 @@ class Window(EntityBase):
                 self._warmup_time = None
             else:
                 # If the window got closed, we calculate warmup time after which we should restart PID
-                self._warmup_time = cast(timedelta, self._api.get_now()) + timedelta(
+                self._warmup_time = cast(datetime, self._api.get_now()) + timedelta(
                     minutes=10
                 )
 
@@ -849,7 +849,6 @@ class RoomClimate(EntityBase):
             self._api.log("Enabling PID for room %s", self._config.room_name)
             self._pid.auto_mode = False
             self._output.clear()
-            self._last_returned_output = 0
 
         self.report_state()
 
@@ -912,7 +911,9 @@ class Room:
         self.room_climate.pid_kp.on_state_changed += self._handle_room_pid_kp
         self.room_climate.pid_ki.on_state_changed += self._handle_room_pid_ki
         if self.floor_climate is not None:
-            self.floor_climate.climate.on_temperature_changed += self._handle_floor_setpoint
+            self.floor_climate.climate.on_temperature_changed += (
+                self._handle_floor_setpoint
+            )
             self.floor_climate.climate.on_mode_changed += self._handle_floor_mode
 
         # Collect MQTT entities and perform entity-specific configuration
